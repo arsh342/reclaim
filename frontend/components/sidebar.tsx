@@ -3,19 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import {
-  BACKEND_STATUS_COPY,
-  BACKEND_STATUS_TONE,
-  type BackendStatus,
-} from "@/components/backend-status";
-
 const NAV = [
   { href: "/", label: "Overview" },
   { href: "/orders", label: "Orders" },
   { href: "/simulate", label: "Simulate" },
 ];
 
-export function Sidebar({ backendStatus }: { backendStatus: BackendStatus }) {
+export function Sidebar() {
   const pathname = usePathname();
 
   return (
@@ -51,24 +45,9 @@ export function Sidebar({ backendStatus }: { backendStatus: BackendStatus }) {
           })}
         </nav>
         <div className="mx-3 mb-3 mt-auto rounded-lg border border-rule bg-surface-raised p-4">
-          <div
-            className="flex items-center gap-2 text-xs text-ink-muted"
-            role="status"
-            aria-live="polite"
-            title={`Backend ${BACKEND_STATUS_COPY[backendStatus]}`}
-          >
-            <span
-              className={`size-2 shrink-0 rounded-full ${BACKEND_STATUS_TONE[backendStatus]} ${
-                backendStatus === "online"
-                  ? "shadow-[0_0_0_3px_var(--accent-soft)]"
-                  : ""
-              }`}
-              aria-hidden="true"
-            />
-            <span className="num uppercase tracking-widest">
-              backend {BACKEND_STATUS_COPY[backendStatus]}
-            </span>
-          </div>
+          <p className="text-[10px] uppercase tracking-widest text-ink-faint">
+            revenue recovery desk
+          </p>
         </div>
       </aside>
 
@@ -78,10 +57,6 @@ export function Sidebar({ backendStatus }: { backendStatus: BackendStatus }) {
             <span className="flex size-8 items-center justify-center rounded-md bg-sidebar-primary text-xs text-sidebar-primary-foreground">R</span>
             Reclaim
           </Link>
-          <span className="flex items-center gap-2 rounded-full border border-rule bg-surface-raised px-2.5 py-1.5 text-[10px] uppercase tracking-widest text-ink-faint">
-            <span className={`size-1.5 rounded-full ${BACKEND_STATUS_TONE[backendStatus]}`} aria-hidden="true" />
-            <span className="num">{BACKEND_STATUS_COPY[backendStatus]}</span>
-          </span>
         </div>
         <nav aria-label="Primary navigation" className="flex gap-2 overflow-x-auto border-t border-rule px-3 py-2">
           {NAV.map((item) => {
