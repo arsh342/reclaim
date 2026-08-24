@@ -1,0 +1,41 @@
+# Policy engine — config
+# Source of truth: docs/reclaim-build-plan.md §4
+# All costs and thresholds live here so a tuning change is one edit.
+
+# intervention_cost: direct cost of executing the action (in INR-equivalent).
+# Lower = cheaper to run.
+intervention_cost:
+  retry_now:         5
+  retry_delayed:     5
+  payment_link:      10
+  whatsapp_nudge:    15
+  alternate_method:  10
+  no_action:         0
+  human_review:      0
+
+# friction_cost: customer-experience penalty per attempt number.
+# Repeating contact costs more trust. Scales with attempt_number.
+friction_cost:
+  per_attempt:        20
+  whatsapp_multiplier: 2.0   # nudge is more annoying than a retry
+
+# risk_penalty: chance of making things worse (e.g. alerting a frustrated
+# customer who was about to recover themselves).
+risk_penalty:
+  retry_now:         5
+  retry_delayed:     2
+  payment_link:      8
+  whatsapp_nudge:    15
+  alternate_method:  10
+  no_action:         0
+  human_review:      0
+
+# When to escalate to HUMAN_REVIEW instead of auto-executing:
+#   - order value above this threshold AND
+#   - top-two allowed actions' ERV difference is below this fraction of the top ERV
+human_review:
+  high_value_threshold: 50000
+  erv_gap_fraction:     0.10
+
+# If the top ERV is below this, prefer NO_ACTION over an intervention.
+no_action_threshold: 0

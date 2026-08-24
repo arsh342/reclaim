@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.venv/
+venv/
+env/
+.env
+.env.local
+.env.*.local
+
+# Backend
+backend/.env
+backend/venv/
+backend/.pytest_cache/
+backend/__pycache__/
+backend/**/__pycache__/
+*.egg-info/
+dist/
+build/
+
+# Frontend
+frontend/.next/
+frontend/node_modules/
+frontend/.env
+frontend/.env.local
+frontend/*.log
+frontend/.turbo/
+frontend/.vercel/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Test artifacts
+/tmp/e2e-backend.log
+/tmp/backend_test.log
+/tmp/payload_*.json
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Coverage
+coverage.xml
+.coverage# Temp files
+0
+
+
+.agents/

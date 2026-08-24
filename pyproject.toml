@@ -1,0 +1,79 @@
+[project]
+name = "reclaim"
+version = "0.1.0"
+description = "AI revenue recovery for failed payments"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "sqlalchemy>=2.0",
+    "psycopg2-binary>=2.9",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "google-genai>=1.0",
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+pythonpath = ["backend", "."]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-select = ["I", "UP", "T20", "FURB", "C4", "PTH", "PGH", "PL", "SIM", "TD", "TRY", "NPY", "FBT"]
+ignore = ["E501", "B008", "C901", "T201", "T203", "PTH123", "FURB140"]
+fixable = ["I", "FURB", "C4", "T20", "UP", "SIM", "TD", "TRY", "NPY", "FBT"]
+format.quote-style = "single"
+format.indent-style = "space"
+format.skip-magic-trailing-comma = false
+line-ending = "lf"
+preview = false
+unsafe-fixes = false
+select = ["E", "F", "I", "UP", "W", "C4", "C9", "T20", "B", "FURB", "PTH", "PGH", "PL", "SIM", "TD", "TRY", "NPY", "FBT"]
+
+[tool.ruff.per-file-ignores]
+"backend/tests/*" = ["S101", "S106", "S108", "S113", "S112", "S311", "S312", "S324", "S404", "S603", "S607"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+strict_optional = true
+follow_imports = "normal"
+ignore_missing_imports = false
+disallow_any_unimported = false
+disallow_any_expr = false
+disallow_any_decorated = false
+disallow_any_explicit = false
+disallow_any_generics = false
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+include = ["*"]
+exclude = ["tests*", "demo*"]
