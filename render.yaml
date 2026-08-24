@@ -3,7 +3,7 @@ services:
     name: reclaim-api
     env: python
     region: oregon
-    buildCommand: "pip install -r backend/requirements.txt"
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "PYTHONPATH=. uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: DATABASE_URL
