@@ -66,3 +66,6 @@ coverage.xml
 
 
 .agents/
+# Local config
+frontend/AGENTS.md
+frontend/CLAUDE.md
