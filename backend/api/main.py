@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
