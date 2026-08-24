@@ -28,12 +28,21 @@ export function useBackendStatus() {
     let mounted = true;
 
     const checkBackend = async () => {
-      try {
-        await api.health();
-        if (mounted) setStatus("online");
-      } catch {
-        if (mounted) setStatus("offline");
+      // Retry up to 3 times with exponential backoff for cold starts
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await api.health();
+          if (mounted) setStatus("online");
+          return;
+        } catch {
+          if (!mounted) return;
+          if (attempt < 2) {
+            // Exponential backoff: 2s, 4s
+            await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+          }
+        }
       }
+      if (mounted) setStatus("offline");
     };
 
     void checkBackend();
