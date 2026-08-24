@@ -252,9 +252,9 @@ def system_status() -> dict[str, Any]:
     }
 
 
-@router.get("/status/html", response_class=HTMLResponse)
+@router.get("/", response_class=HTMLResponse)
 def status_page() -> str:
-    """HTML status page similar to status.claude.com"""
+    """HTML status page at root / - similar to status.claude.com"""
     settings = get_settings()
     # Get the JSON status data by calling the status endpoint logic
     # We'll reuse the logic inline for simplicity
@@ -312,7 +312,7 @@ def status_page() -> str:
     services_html = ""
     for name, svc in services.items():
         svc_status = svc["status"]
-        latency_str = f'{svc["latency_ms"]:.1f}ms' if svc["latency_ms"] is not None else "—"
+        latency_str = f'{svc["latency_ms"]:.1f}ms' if svc["latency_ms"] is not None else "\u2014"
         services_html += f'''
                 <div class="panel p-5 flex items-center justify-between gap-4">
                     <div class="flex items-center gap-3 min-w-0">
@@ -331,33 +331,174 @@ def status_page() -> str:
                     </div>
                 </div>'''
 
-    html = f"""
+    # Embedded CSS - no external dependencies
+    css = """
+    <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        * { margin: 0; padding: 0; }
+        html { font-size: 16px; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 1.5; color: #1a1a2e; background: #f8fafc; min-height: 100vh; }
+        a { color: #2563eb; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .panel { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; }
+        .font-mono { font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace; }
+        .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .min-w-0 { min-width: 0; }
+        .shrink-0 { flex-shrink: 0; }
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .animate-spin { animation: spin 1s linear infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    </style>
+"""
+
+    # Generate services HTML
+    service_status_colors = {
+        "operational": "bg-green-500",
+        "degraded": "bg-yellow-500",
+        "partial_outage": "bg-orange-500",
+        "major_outage": "bg-red-500",
+        "maintenance": "bg-blue-500",
+    }
+
+    services_html = ""
+    for name, svc in services.items():
+        svc_status = svc["status"]
+        latency_str = f'{svc["latency_ms"]:.1f}ms' if svc["latency_ms"] is not None else "\u2014"
+        services_html += f'''
+                <div class="panel p-5 flex items-center justify-between gap-4">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <div class="w-3 h-3 rounded-full {service_status_colors[svc_status]}"></div>
+                        <div class="min-w-0">
+                            <h3 class="font-medium text-gray-900 truncate">{name}</h3>
+                            <p class="text-sm text-gray-500 truncate">{svc["description"]}</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-4 shrink-0">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {service_status_colors[svc_status]} text-white">
+                            {svc_status.capitalize()}
+                        </span>
+                        <span class="font-mono text-sm text-gray-500">{latency_str}</span>
+                        <span class="text-[10px] text-gray-400 uppercase tracking-widest">Just now</span>
+                    </div>
+                </div>'''
+
+    # Status colors and labels
+    status_colors = {
+        "operational": "#10B981",
+        "degraded": "#F59E0B",
+        "partial_outage": "#F97316",
+        "major_outage": "#EF4444",
+        "maintenance": "#3B82F6",
+    }
+
+    status_bg_colors = {
+        "operational": "#ECFDF5",
+        "degraded": "#FFFBEB",
+        "partial_outage": "#FFF7ED",
+        "major_outage": "#FEF2F2",
+        "maintenance": "#EFF6FF",
+    }
+
+    status_labels = {
+        "operational": "Operational",
+        "degraded": "Degraded Performance",
+        "partial_outage": "Partial Outage",
+        "major_outage": "Major Outage",
+        "maintenance": "Under Maintenance",
+    }
+
+    service_status_colors = {
+        "operational": "bg-green-500",
+        "degraded": "bg-yellow-500",
+        "partial_outage": "bg-orange-500",
+        "major_outage": "bg-red-500",
+        "maintenance": "bg-blue-500",
+    }
+
+    # Generate the complete HTML with embedded CSS
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Reclaim System Status - Real-time status of Reclaim services">
+    <title>System Status | Reclaim</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    {css}
+</head>
+<body class="bg-gray-50 min-h-screen" style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+    <!-- Status Banner -->
+    <div class="fixed top-0 left-0 right-0 z-50 px-4 py-3 border-b border-gray-200 {{
+        'bg-green-50 border-green-200' if overall_status == 'operational'
+        else 'bg-yellow-50 border-yellow-200' if overall_status == 'degraded'
+        else 'bg-orange-50 border-orange-200' if overall_status == 'partial_outage'
+        else 'bg-red-50 border-red-200'
+    }}">
+        <div class="max-w-7xl mx-auto flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-3 h-3 rounded-full {{
+                    'bg-green-500' if overall_status == 'operational'
+                    else 'bg-yellow-500' if overall_status == 'degraded'
+                    else 'bg-orange-500' if overall_status == 'partial_outage'
+                    else 'bg-red-500' if overall_status == 'major_outage'
+                    else 'bg-blue-500'
+                }}"></div>
+                <span class="text-sm font-medium text-gray-900">
+                    {status_labels.get(overall_status, overall_status)}
+                </span>
+            </div>
+            <span class="text-xs text-gray-500" id="last-updated">{datetime.utcnow().strftime('%H:%M:%S UTC')}</span>
+        </div>
+    </div>
+
+    <main class="max-w-7xl mx-auto px-4 py-20">
+        <!-- Header -->
+        <section class="mb-12">
+            <h1 class="text-3xl font-semibold tracking-tight text-gray-900">System Status</h1>
+            <p class="mt-2 text-sm text-gray-500">
+                Real-time status of Reclaim services. Last updated:
+                <time class="font-mono ml-1" id="last-updated">{datetime.utcnow().strftime('%H:%M:%S UTC')}</time>
+            </p>
+        </section>
+
+        <!-- Services Grid -->
+        <section class="mb-12" aria-label="Services">
+            <h2 class="text-xl font-semibold tracking-tight text-gray-900 mb-6">Services</h2>
+            <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {services_html}
+            </div>
+        </section>
 
         <!-- Incidents -->
         <section aria-label="Incidents">
-            <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-semibold tracking-tight text-gray-900">Recent Incidents</h2>
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="text-xl font-semibold tracking-tight text-gray-900">Recent Incidents</h2>
             </div>
-            <div className="space-y-4">
-                <div className="panel p-8 text-center">
+            <div class="space-y-4">
+                <div class="panel p-8 text-center">
                     <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 12l2 2 4-4m6 11a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 11a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    <p className="mt-4 text-gray-500">No incidents reported. All systems operational.</p>
+                    <p class="mt-4 text-gray-500">No incidents reported. All systems operational.</p>
                 </div>
         </section>
 
         <!-- Footer -->
-        <footer className="mt-16 pt-8 border-t border-gray-200">
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-gray-500">
+        <footer class="mt-16 pt-8 border-t border-gray-200">
+            <div class="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-gray-500">
                 <p>
-                    <a href="/docs" className="underline hover:text-gray-900">API Documentation</a>
-                    {{" • "}}
-                    <a href="mailto:support@reclaim.example.com" className="underline hover:text-gray-900">Contact Support</a>
-                    {{" • "}}
-                    <a href="https://github.com/arsh342/reclaim" className="underline hover:text-gray-900" target="_blank" rel="noopener noreferrer">GitHub</a>
+                    <a href="/docs" class="underline hover:text-gray-900">API Documentation</a>
+                    {" \u2022 "}
+                    <a href="mailto:support@reclaim.example.com" class="underline hover:text-gray-900">Contact Support</a>
+                    {" \u2022 "}
+                    <a href="https://github.com/arsh342/reclaim" class="underline hover:text-gray-900" target="_blank" rel="noopener noreferrer">GitHub</a>
                 </p>
-                <p className="text-xs text-gray-400 uppercase tracking-widest">Reclaim v0.1.0</p>
+                <p class="text-xs text-gray-400 uppercase tracking-widest">Reclaim v0.1.0</p>
             </div>
         </footer>
     </main>
