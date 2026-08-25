@@ -1,37 +1,56 @@
-from collections.abc import Generator
+"""Database configuration and session management."""
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
-from backend.config import get_settings
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import DeclarativeBase
+
+from backend.core.config import settings
 
 
 class Base(DeclarativeBase):
     pass
 
 
-_settings = get_settings()
+engine = create_async_engine(
+    settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://"),
+    echo=settings.DEBUG,
+    pool_pre_ping=True,
+)
 
-# SQLite doesn't support pool_size/max_overflow
-if _settings.database_url.startswith("sqlite"):
-    engine = create_engine(
-        _settings.database_url,
-        pool_pre_ping=True,
-        connect_args={"check_same_thread": False},
-    )
-else:
-    engine = create_engine(
-        _settings.database_url,
-        pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
-    )
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+async_session_maker = async_sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
 
 
-def get_db() -> Generator[Session, None, None]:
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+async def init_db() -> None:
+    """Create all tables."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+@asynccontextmanager
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """Get database session."""
+    async with async_session_maker() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
+
+
+async def get_session_dependency() -> AsyncGenerator[AsyncSession, None]:
+    """FastAPI dependency for database session."""
+    async with get_session() as session:
+        yield session

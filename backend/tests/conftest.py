@@ -1,103 +1,134 @@
-"""Shared pytest fixtures.
+"""Test configuration and fixtures."""
 
-Tests run against the live Supabase database using per-test schemas
-(`test_<random>`) so they don't collide with each other or with live
-data. Each test creates the schema, runs against it, then drops it on
-teardown.
-"""
-
+import asyncio
 import os
-import uuid
+from typing import AsyncGenerator
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
+from backend.db.session import Base, get_session_dependency
+from backend.db.models import Merchant, Customer, Order, PaymentAttempt
 from backend.api.main import app
-from backend.config import get_settings
-from backend.db import session as db_session
 
 
-@pytest.fixture(autouse=True)
-def isolated_schema(monkeypatch):
-    """Create a fresh Postgres schema per test, point the app at it, drop on exit."""
-    settings = get_settings()
-    schema_name = f"test_{uuid.uuid4().hex[:12]}"
+# Use test database URL
+TEST_DATABASE_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://postgres:postgres@localhost:5432/reclaim_test",
+)
 
-    admin_engine = create_engine(settings.database_url, isolation_level="AUTOCOMMIT")
-    with admin_engine.connect() as conn:
-        conn.execute(text(f'CREATE SCHEMA "{schema_name}"'))
+test_engine = create_async_engine(
+    TEST_DATABASE_URL,
+    echo=False,
+    poolclass=NullPool,
+)
 
-    monkeypatch.setenv("DATABASE_SCHEMA", schema_name)
-
-    test_engine = create_engine(
-        settings.database_url,
-        connect_args={"options": f"-c search_path={schema_name},public"},
-        pool_pre_ping=True,
-    )
-
-    with test_engine.connect() as conn:
-        for stmt in _schema_statements():
-            conn.execute(text(stmt))
-        conn.commit()
-
-    monkeypatch.setattr(db_session, "engine", test_engine)
-    TestSession = sessionmaker(bind=test_engine, autoflush=False, autocommit=False)
-    monkeypatch.setattr(db_session, "SessionLocal", TestSession)
-
-    yield test_engine
-
-    with admin_engine.connect() as conn:
-        conn.execute(text(f'DROP SCHEMA "{schema_name}" CASCADE'))
-    admin_engine.dispose()
-    test_engine.dispose()
+test_session_maker = async_sessionmaker(
+    test_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
 
 
-def _schema_statements() -> list[str]:
-    """Read backend/db/schema.sql and split into statements (no IF NOT EXISTS for policies)."""
-    sql_path = os.path.join(os.path.dirname(__file__), "..", "db", "schema.sql")
-    with open(sql_path) as f:
-        raw = f.read()
-
-    statements: list[str] = []
-    buf: list[str] = []
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("--"):
-            continue
-        buf.append(line)
-        if stripped.endswith(";"):
-            statements.append("\n".join(buf).rstrip(";"))
-            buf = []
-    return [s for s in statements if s.strip()]
+@pytest_asyncio.fixture(scope="session")
+def event_loop():
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
 
 
-@pytest.fixture
-def db(monkeypatch):
-    """A clean Session bound to the per-test schema."""
-    from backend.db.session import SessionLocal
-
-    session = SessionLocal()
-    try:
+@pytest_asyncio.fixture(scope="function")
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Create a fresh database session for each test."""
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    
+    async with test_session_maker() as session:
         yield session
-    finally:
-        session.close()
+    
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
-@pytest.fixture
-def client(monkeypatch):
-    """A TestClient with the per-test schema's DB session injected."""
-    from backend.db import session as db_session
-
-    def _override_get_db():
-        s = db_session.SessionLocal()
-        try:
-            yield s
-        finally:
-            s.close()
-
-    app.dependency_overrides[db_session.get_db] = _override_get_db
-    with TestClient(app) as c:
-        yield c
+@pytest_asyncio.fixture(scope="function")
+async def client(db_session: AsyncSession):
+    """Create test client with overridden database dependency."""
+    from httpx import ASGITransport, AsyncClient
+    
+    async def override_get_session():
+        yield db_session
+    
+    app.dependency_overrides[get_session_dependency] = override_get_session
+    
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        yield ac
+    
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def sample_merchant(db_session: AsyncSession) -> Merchant:
+    merchant = Merchant(
+        merchant_id="merchant_test",
+        max_retries=3,
+        contact_budget_per_day=2,
+    )
+    db_session.add(merchant)
+    await db_session.commit()
+    await db_session.refresh(merchant)
+    return merchant
+
+
+@pytest_asyncio.fixture
+async def sample_customer(db_session: AsyncSession) -> Customer:
+    customer = Customer(
+        customer_id="cust_test",
+        recovery_propensity=0.5,
+        customer_value=10000,
+    )
+    db_session.add(customer)
+    await db_session.commit()
+    await db_session.refresh(customer)
+    return customer
+
+
+@pytest_asyncio.fixture
+async def sample_order(
+    db_session: AsyncSession,
+    sample_merchant: Merchant,
+    sample_customer: Customer,
+) -> Order:
+    order = Order(
+        order_id="order_test",
+        merchant_id=sample_merchant.merchant_id,
+        customer_id=sample_customer.customer_id,
+        amount=5000,
+        currency="INR",
+        status="pending",
+    )
+    db_session.add(order)
+    await db_session.commit()
+    await db_session.refresh(order)
+    return order
+
+
+@pytest_asyncio.fixture
+async def sample_attempt(
+    db_session: AsyncSession,
+    sample_order: Order,
+) -> PaymentAttempt:
+    attempt = PaymentAttempt(
+        payment_id="pay_test_1",
+        order_id=sample_order.order_id,
+        attempt_number=1,
+        method="card",
+        status="failed",
+        error_reason="issuer_timeout",
+    )
+    db_session.add(attempt)
+    await db_session.commit()
+    await db_session.refresh(attempt)
+    return attempt

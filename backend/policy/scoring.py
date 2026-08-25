@@ -1,55 +1,72 @@
-"""Expected-value scoring.
-
-ERV formula (build-plan §4):
-    ERV(action) = P(recovery | context, action) × recoverable_amount
-                  − intervention_cost(action)
-                  − friction_cost(action, attempt_number)
-                  − risk_penalty(action)
-
-The simulator gives us `P(recovery | ...)`. Everything else is config.
-The score is a pure function of (context, action) — no I/O, no side
-effects. That makes it cheap to test and trivial to reuse.
-"""
+"""ERV (Expected Recovery Value) calculation."""
 
 from decimal import Decimal
+from typing import Dict, Optional
 
-from backend.policy.config_loader import load_policy_config
-from backend.policy.alternate import recommend_alternate_method
-from backend.policy.types import ActionType, PolicyContext
-from backend.simulator.config_loader import load_config as load_sim_config
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-
-def _friction_for(cfg, action: ActionType, attempt_number: int) -> float:
-    base = cfg.friction_cost.per_attempt * max(0, attempt_number - 1)
-    if action == "whatsapp_nudge":
-        return base * cfg.friction_cost.whatsapp_multiplier
-    return base
+from backend.db.models import Order, PaymentAttempt
+from backend.simulator.outcome import simulate_recovery_probability
+from backend.policy.constraints import RETRY_NOW, RETRY_DELAYED, PAYMENT_LINK, WHATSAPP_NUDGE, ALTERNATE_METHOD
 
 
-def expected_value(ctx: PolicyContext, action: ActionType) -> float:
-    sim = load_sim_config()
-    policy = load_policy_config()
+ACTION_COSTS: Dict[str, Decimal] = {
+    RETRY_NOW: Decimal("0"),
+    RETRY_DELAYED: Decimal("0"),
+    PAYMENT_LINK: Decimal("5"),
+    WHATSAPP_NUDGE: Decimal("2"),
+    ALTERNATE_METHOD: Decimal("10"),
+}
 
-    if action in ("no_action", "human_review"):
-        return 0.0
+FRICTION_COSTS: Dict[str, Decimal] = {
+    RETRY_NOW: Decimal("1"),
+    RETRY_DELAYED: Decimal("0.5"),
+    PAYMENT_LINK: Decimal("3"),
+    WHATSAPP_NUDGE: Decimal("1"),
+    ALTERNATE_METHOD: Decimal("5"),
+}
 
-    if ctx.attempt.error_reason is None:
-        return 0.0
+RISK_PENALTIES: Dict[str, Decimal] = {
+    RETRY_NOW: Decimal("0"),
+    RETRY_DELAYED: Decimal("0"),
+    PAYMENT_LINK: Decimal("0"),
+    WHATSAPP_NUDGE: Decimal("0"),
+    ALTERNATE_METHOD: Decimal("0"),
+}
 
-    alternate_method = (
-        recommend_alternate_method(ctx) if action == "alternate_method" else None
+
+async def calculate_expected_value(
+    session: AsyncSession,
+    order_id: str,
+    action: str,
+) -> Decimal:
+    """Calculate ERV for an action."""
+    order = await session.get(Order, order_id)
+    if not order:
+        return Decimal("0")
+    
+    # Get latest attempt
+    stmt = (
+        select(PaymentAttempt)
+        .where(PaymentAttempt.order_id == order_id)
+        .order_by(PaymentAttempt.attempt_number.desc())
+        .limit(1)
     )
-    p = sim.probability(
-        reason=ctx.attempt.error_reason,
-        method=ctx.attempt.method,
-        action=action,
-        propensity=ctx.customer.recovery_propensity,
-        alternate_method=alternate_method,
-    )
-
-    recoverable = float(ctx.order.amount)
-    cost = policy.cost_for(action)
-    friction = _friction_for(policy, action, ctx.attempt.attempt_number)
-    risk = policy.risk_for(action)
-
-    return p * recoverable - cost - friction - risk
+    result = await session.execute(stmt)
+    attempt = result.scalar_one_or_none()
+    
+    if not attempt:
+        return Decimal("0")
+    
+    # Get recovery probability from simulator
+    probability = await simulate_recovery_probability(order, attempt, action)
+    
+    recoverable = order.amount
+    intervention_cost = ACTION_COSTS.get(action, Decimal("0"))
+    friction_cost = FRICTION_COSTS.get(action, Decimal("0"))
+    risk_penalty = RISK_PENALTIES.get(action, Decimal("0"))
+    
+    erv = (probability * recoverable) - intervention_cost - friction_cost - risk_penalty
+    
+    return max(erv, Decimal("0"))

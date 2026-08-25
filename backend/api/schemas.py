@@ -1,91 +1,170 @@
-"""Pydantic schemas for API responses — single source of truth for types.
-These generate the OpenAPI spec which drives frontend type generation.
-"""
+"""Pydantic schemas for API requests and responses."""
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+class WebhookEventRequest(BaseModel):
+    entity: str = Field(..., pattern="^event$")
+    account_id: str
+    event: str = Field(..., pattern="^(payment\\.failed|payment\\.captured)$")
+    contains: List[str]
+    payload: Dict[str, Any]
+
+    @field_validator("entity")
+    @classmethod
+    def validate_entity(cls, v: str) -> str:
+        if v != "event":
+            raise ValueError("entity must be 'event'")
+        return v
+
+
+class PaymentEntity(BaseModel):
+    id: str
+    order_id: str
+    amount: int
+    currency: str
+    method: str
+    status: str
+    attempt_number: int
+    error_code: Optional[str] = None
+    error_description: Optional[str] = None
+    error_reason: Optional[str] = None
+    error_source: Optional[str] = None
+    error_step: Optional[str] = None
+
+
+class PaymentPayload(BaseModel):
+    payment: PaymentEntity
+
+
+class WebhookEventPayload(BaseModel):
+    entity: str = "event"
+    account_id: str
+    event: str
+    contains: List[str]
+    payload: PaymentPayload
 
 
 class IngestResult(BaseModel):
-    status: str
+    status: str  # "processed" | "duplicate"
     event_id: str
+    order_id: Optional[str] = None
+    message: str
+
+
+class OrderSummary(BaseModel):
     order_id: str
-    action_id: Optional[int] = None
+    merchant_id: str
+    customer_id: str
+    amount: Decimal
+    currency: str
+    status: str
+    created_at: datetime
+    latest_attempt_status: Optional[str] = None
+    latest_attempt_reason: Optional[str] = None
 
 
 class PaymentAttemptSchema(BaseModel):
     payment_id: str
+    order_id: str
     attempt_number: int
     method: str
     status: str
     error_code: Optional[str] = None
     error_reason: Optional[str] = None
-    created_at: Optional[datetime] = None
+    error_source: Optional[str] = None
+    error_step: Optional[str] = None
+    created_at: datetime
 
 
 class RecoveryActionSchema(BaseModel):
     action_id: int
+    order_id: str
     action_type: str
-    expected_value: float
+    expected_value: Decimal
     status: str
-    scheduled_at: Optional[datetime] = None
+    scheduled_at: datetime
     executed_at: Optional[datetime] = None
     cancelled_at: Optional[datetime] = None
     reason: Optional[str] = None
-    explanation: Optional[str] = None
-    explanation_model: Optional[str] = None
 
 
-class OrderSummary(BaseModel):
+class AgentEventSchema(BaseModel):
+    event_seq: int
+    run_id: str
     order_id: str
-    amount: float
-    currency: str
-    status: str
-    created_at: Optional[datetime] = None
+    agent_stage: str
+    event_type: str
+    payload: Dict[str, Any]
+    created_at: datetime
 
 
-class OrderDetail(BaseModel):
+class AgentRunSchema(BaseModel):
+    run_id: str
     order_id: str
-    merchant_id: Optional[str] = None
-    customer_id: Optional[str] = None
-    amount: float
-    currency: str
     status: str
-    created_at: Optional[datetime] = None
-    payment_attempts: list[PaymentAttemptSchema] = []
-    recovery_actions: list[RecoveryActionSchema] = []
-    decision_analysis: "DecisionAnalysis"
+    current_stage: Optional[str] = None
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    final_action: Optional[str] = None
+    final_reason: Optional[str] = None
 
 
 class CandidateAction(BaseModel):
     action: str
-    erv: float
+    probability: float
+    expected_value: float
+    intervention_cost: float
+    friction_cost: float
+    risk_penalty: float
 
 
 class DecisionAnalysis(BaseModel):
-    candidate_actions: list[CandidateAction] = []
-    selected_action: Optional[str] = None
+    diagnosis: Dict[str, Any]
+    candidates: List[CandidateAction]
+    chosen_action: Optional[str] = None
+    stop_conditions: List[str] = []
 
 
 class PolicyMetrics(BaseModel):
+    policy_name: str
     recovered_revenue: float
-    total_revenue_at_risk: float
     recovery_rate: float
+    total_revenue_at_risk: float
     unnecessary_interventions: int
-    total_interventions: int
+    contact_count: int
+    avg_time_to_resolution_hours: float
+    policy_rejections: int
 
 
 class EvalSummary(BaseModel):
-    seed: int
-    n_orders: int
-    reclaim: PolicyMetrics
     always_retry: PolicyMetrics
-    delta: dict[str, float]  # recovered_revenue, recovery_rate
+    reclaim: PolicyMetrics
+    incremental_revenue: float
+    incremental_recovery_rate: float
+    total_orders: int
+    seed: int
 
 
-# Update forward refs
-OrderDetail.model_rebuild()
-DecisionAnalysis.model_rebuild()
+class OrderDetail(BaseModel):
+    order: OrderSummary
+    attempts: List[PaymentAttemptSchema]
+    recovery_actions: List[RecoveryActionSchema]
+    agent_runs: List[AgentRunSchema]
+    decision_analysis: Optional[DecisionAnalysis] = None
+
+
+class HealthResponse(BaseModel):
+    status: str
+
+
+class SimulateWebhookRequest(BaseModel):
+    entity: str = "event"
+    account_id: str
+    event: str = Field(..., pattern="^(payment\\.failed|payment\\.captured)$")
+    contains: List[str]
+    payload: PaymentPayload
