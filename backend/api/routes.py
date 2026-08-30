@@ -457,6 +457,35 @@ async def stream_mcp_activity():
     async def event_generator():
         async for activity in activity_stream():
             yield f"data: {activity.model_dump_json()}\n\n"
+
+
+@router.post("/seed")
+async def seed_demo_data(db: AsyncSession = Depends(get_session_dependency)):
+    """Seed demo data for testing (idempotent)."""
+    from scripts.seed_demo import main as seed_main
+    import sys
+    import io
+    from contextlib import redirect_stdout, redirect_stderr
+    
+    # Capture output
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+    
+    try:
+        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+            await seed_main(db)
+        return {
+            "status": "success",
+            "message": "Demo data seeded",
+            "stdout": stdout_capture.getvalue(),
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "stdout": stdout_capture.getvalue(),
+            "stderr": stderr_capture.getvalue(),
+        }
     
     return StreamingResponse(
         event_generator(),

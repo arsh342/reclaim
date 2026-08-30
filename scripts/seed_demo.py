@@ -296,10 +296,13 @@ async def seed_demo_data(session: AsyncSession):
     print("Demo data seeded successfully!")
 
 
-async def main():
-    await init_db()
-    async with get_session() as session:
-        await seed_demo_data(session)
+async def main(db: AsyncSession = None):
+    if db is None:
+        await init_db()
+        async with get_session() as session:
+            await seed_demo_data(session)
+    else:
+        await seed_demo_data(db)
 
 
 if __name__ == "__main__":
