@@ -114,7 +114,7 @@ class AgentOrchestrator:
         
         # Call get_order_context tool
         await emit_tool_called(session, state.run_id, state.order_id, AgentStage.CONTEXT_LOADING, "get_order_context", {"order_id": state.order_id})
-        context = await tool_registry.call("get_order_context", order_id=state.order_id)
+        context = await tool_registry.call("get_order_context", order_id=state.order_id, session=session)
         await emit_tool_completed(session, state.run_id, state.order_id, AgentStage.CONTEXT_LOADING, "get_order_context", context, int((time.time() - start) * 1000))
         
         state.context = context
@@ -139,7 +139,7 @@ class AgentOrchestrator:
         
         # Get allowed actions from policy
         await emit_tool_called(session, state.run_id, state.order_id, AgentStage.GENERATING_CANDIDATES, "get_allowed_actions", {"order_id": state.order_id})
-        allowed = await tool_registry.call("get_allowed_actions", order_id=state.order_id)
+        allowed = await tool_registry.call("get_allowed_actions", order_id=state.order_id, session=session)
         await emit_tool_completed(session, state.run_id, state.order_id, AgentStage.GENERATING_CANDIDATES, "get_allowed_actions", {"allowed_actions": allowed}, int((time.time() - start) * 1000))
         
         candidates = await generate_candidates(self.llm, state.diagnosis, allowed)
@@ -155,9 +155,32 @@ class AgentOrchestrator:
         
         counterfactuals = []
         for candidate in state.candidates:
-            action = candidate["action"]
+            # Validate candidate has required action field
+            action = candidate.get("action")
+            if not action:
+                await emit_tool_completed(
+                    session, state.run_id, state.order_id, 
+                    AgentStage.EVALUATING_COUNTERFACTUALS, 
+                    "estimate_recovery", 
+                    {"error": "Missing action in candidate"}, 
+                    int((time.time() - start) * 1000)
+                )
+                continue
+                
             await emit_tool_called(session, state.run_id, state.order_id, AgentStage.EVALUATING_COUNTERFACTUALS, "estimate_recovery", {"order_id": state.order_id, "action": action})
-            result = await tool_registry.call("estimate_recovery", order_id=state.order_id, action=action)
+            result = await tool_registry.call("estimate_recovery", order_id=state.order_id, action=action, session=session)
+            
+            # Validate result has expected fields
+            if not isinstance(result, dict) or "error" in result:
+                await emit_tool_completed(
+                    session, state.run_id, state.order_id, 
+                    AgentStage.EVALUATING_COUNTERFACTUALS, 
+                    "estimate_recovery", 
+                    {"error": result.get("error", "Invalid result")}, 
+                    int((time.time() - start) * 1000)
+                )
+                continue
+                
             await emit_tool_completed(session, state.run_id, state.order_id, AgentStage.EVALUATING_COUNTERFACTUALS, "estimate_recovery", result, int((time.time() - start) * 1000))
             counterfactuals.append({"action": action, **result})
         
@@ -195,7 +218,10 @@ class AgentOrchestrator:
         }
         
         if not validation.approved:
-            await emit_policy_rejected(session, state.run_id, state.order_id, state.plan.get("steps", [{}])[0].get("action", "unknown"), validation.reason or "Unknown")
+            first_action = "unknown"
+            if state.plan and state.plan.get("steps"):
+                first_action = state.plan["steps"][0].get("action", "unknown")
+            await emit_policy_rejected(session, state.run_id, state.order_id, first_action, validation.reason or "Unknown")
         else:
             await emit_stage_completed(session, state.run_id, state.order_id, AgentStage.SAFETY_CHECK, state.safety_result, int((time.time() - start) * 1000))
         
@@ -213,9 +239,10 @@ class AgentOrchestrator:
         # Execute first step (simplified - real impl would handle multi-step)
         first_step = state.plan["steps"][0]
         action = first_step.get("action")
+        delay_minutes = first_step.get("delay_minutes", 0)
         
         if action:
-            result = await execute_recovery_action(session, state.order_id, action)
+            result = await execute_recovery_action(session, state.order_id, action, delay_minutes)
             state.execution_result = {
                 "success": result.success,
                 "action_id": result.action_id,

@@ -172,6 +172,34 @@ export default function OrdersPage() {
                           <div className="text-xs text-muted-foreground mt-1">
                             Expected: ₹{action.expected_value.toLocaleString()} | {action.reason ?? "No reason"}
                           </div>
+                          {action.status === "scheduled" && (
+                            <div className="mt-2 flex gap-2">
+                              <button
+                                onClick={async () => {
+                                  const result = await api.completeRecoveryAction(action.action_id, true, "Marked as recovered manually");
+                                  if (result.success) {
+                                    const updated = await api.order(selectedOrder.order.order_id);
+                                    setSelectedOrder(updated);
+                                  }
+                                }}
+                                className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 transition-colors"
+                              >
+                                Mark Recovered
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  const result = await api.completeRecoveryAction(action.action_id, false, "Marked as failed manually");
+                                  if (result.success) {
+                                    const updated = await api.order(selectedOrder.order.order_id);
+                                    setSelectedOrder(updated);
+                                  }
+                                }}
+                                className="px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors"
+                              >
+                                Mark Failed
+                              </button>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -199,6 +227,64 @@ export default function OrdersPage() {
                     </div>
                   </div>
                 )}
+
+                {/* Decision Inspector */}
+                {selectedOrder.decision_analysis && (() => {
+                  const da = selectedOrder.decision_analysis!;
+                  return (
+                    <div className="mt-6 p-4 border rounded-lg bg-muted/50">
+                      <h4 className="font-medium text-sm text-muted-foreground mb-3 flex items-center gap-2">
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        Decision Inspector
+                      </h4>
+                      <div className="space-y-4 text-sm">
+                      {da.diagnosis && Object.keys(da.diagnosis).length > 0 && (
+                        <div>
+                          <div className="font-medium mb-1">Diagnosis</div>
+                          <pre className="text-xs text-muted-foreground bg-background p-2 rounded overflow-auto max-h-32">{JSON.stringify(da.diagnosis, null, 2)}</pre>
+                        </div>
+                      )}
+                      {da.candidates && da.candidates.length > 0 && (
+                        <div>
+                          <div className="font-medium mb-1">Candidates Evaluated</div>
+                          <div className="space-y-2">
+                            {da.candidates.map((c: any, idx: number) => {
+                              const isChosen = da.chosen_action === c.action;
+                              return (
+                                <div key={idx} className={`p-2 border rounded ${isChosen ? 'bg-primary/10 border-primary' : ''}`}>
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-medium">{c.action}</span>
+                                    {isChosen && (
+                                      <Badge variant="success" className="text-xs">CHOSEN</Badge>
+                                    )}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground flex gap-4 mt-1">
+                                    <span>P(recovery): {(c.probability * 100).toFixed(1)}%</span>
+                                    <span>EV: ₹{c.expected_value.toLocaleString()}</span>
+                                    <span>Cost: ₹{c.intervention_cost.toLocaleString()}</span>
+                                    <span>Friction: {c.friction_cost.toFixed(1)}</span>
+                                    <span>Risk: {c.risk_penalty.toFixed(1)}</span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      {da.stop_conditions && da.stop_conditions.length > 0 && (
+                        <div>
+                          <div className="font-medium mb-1">Stop Conditions</div>
+                          <ul className="list-disc list-inside text-xs text-muted-foreground space-y-1">
+                            {da.stop_conditions.map((reason: string, idx: number) => (
+                              <li key={idx}>{reason}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  );
+                })()}
               </CardContent>
             </Card>
           </div>

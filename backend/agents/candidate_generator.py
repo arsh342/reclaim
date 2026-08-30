@@ -72,10 +72,15 @@ async def generate_candidates(
     
     # Filter to only allowed actions
     candidates = result.get("candidates", [])
-    filtered = [c for c in candidates if c["action"] in allowed_actions]
+    filtered = [c for c in candidates if c.get("action") in allowed_actions]
     
-    # If none allowed, add NO_ACTION
-    if not filtered and NO_ACTION in allowed_actions:
-        filtered = [{"action": NO_ACTION, "rationale": "No other actions allowed", "params": {}}]
+    # If LLM returns no valid candidates, provide sensible defaults based on allowed actions
+    if not filtered:
+        # Priority order for default candidates
+        default_priority = [RETRY_DELAYED, RETRY_NOW, PAYMENT_LINK, ALTERNATE_METHOD, WHATSAPP_NUDGE, HUMAN_REVIEW, NO_ACTION]
+        for action in default_priority:
+            if action in allowed_actions:
+                filtered = [{"action": action, "rationale": f"Default candidate for {action}", "params": {}}]
+                break
     
     return filtered

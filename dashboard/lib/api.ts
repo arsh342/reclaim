@@ -102,6 +102,30 @@ export interface DecisionAnalysis {
   stop_conditions: string[];
 }
 
+export interface MCPStatus {
+  status: string;
+  endpoint: string;
+  transport: string;
+  protocol: string;
+  tools_count: number;
+}
+
+export interface MCPTool {
+  name: string;
+  description: string;
+  read_only: boolean;
+  financial_side_effect: boolean;
+}
+
+export interface MCPActivity {
+  timestamp: string;
+  tool: string;
+  duration_ms: number;
+  status: string;
+  order_id?: string;
+  error?: string;
+}
+
 export interface PolicyMetrics {
   policy_name: string;
   recovered_revenue: number;
@@ -170,11 +194,26 @@ export const api = {
   agentRuns: () => request<AgentRun[]>('/api/agent-runs'),
   agentRun: (runId: string) => request<AgentRun>(`/api/agent-runs/${runId}`),
   agentEvents: (runId: string) => request<AgentEvent[]>(`/api/agent-runs/${runId}/events`),
+  startAgentRun: (orderId: string) =>
+    request<AgentRun>(`/api/agent-runs/${orderId}/start`, { method: 'POST' }),
+  replayAgentRun: (runId: string) =>
+    request<AgentRun>(`/api/agent-runs/${runId}/replay`, { method: 'POST' }),
   simulateWebhook: (body: SimulateWebhookRequest) =>
     request<IngestResult>('/api/webhooks/simulate', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  mcpStatus: () => request<MCPStatus>('/api/mcp/status'),
+  mcpTools: () => request<MCPTool[]>('/api/mcp/tools'),
+  mcpActivity: (limit = 50) => request<MCPActivity[]>(`/api/mcp/activity?limit=${limit}`),
+  completeRecoveryAction: (actionId: number, success = true, reason?: string) =>
+    request<{ success: boolean; action_id: number | null; reason?: string }>(
+      `/api/recovery-actions/${actionId}/complete`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ action_id: actionId, success, reason }),
+      },
+    ),
 };
 
 // Helpers

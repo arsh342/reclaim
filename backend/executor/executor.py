@@ -1,7 +1,7 @@
 """Safe executor with idempotency and policy re-check."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -76,8 +76,13 @@ async def execute_recovery_action(
     session: AsyncSession,
     order_id: str,
     action_type: str,
+    delay_minutes: int = 0,
 ) -> ActionResult:
-    """Execute a recovery action with safety checks."""
+    """Execute a recovery action with safety checks.
+    
+    For immediate actions (delay_minutes=0), marks as executed.
+    For delayed actions (delay_minutes>0), schedules for later execution.
+    """
     # Re-check policy immediately before execution
     allowed = await get_allowed_actions(session, order_id)
     if action_type not in allowed:
@@ -100,25 +105,45 @@ async def execute_recovery_action(
     if not order:
         return ActionResult(success=False, reason="Order not found")
     
-    # Calculate expected value (simplified)
+    # Calculate expected value
     from backend.policy.scoring import calculate_expected_value
     expected_value = await calculate_expected_value(session, order_id, action_type)
     
     # Create recovery action
     action = await create_recovery_action(session, order_id, action_type, expected_value)
     
-    # Simulate execution (in real impl, call Razorpay sandbox)
-    # For now, just mark as executed
-    action.status = "executed"
-    action.executed_at = datetime.now(timezone.utc)
-    
-    await session.flush()
-    
-    return ActionResult(
-        success=True,
-        action_id=action.action_id,
-        scheduled_at=action.scheduled_at,
-    )
+    if delay_minutes > 0:
+        # Schedule for later execution
+        action.scheduled_at = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+        action.status = "scheduled"
+        await session.flush()
+        
+        return ActionResult(
+            success=True,
+            action_id=action.action_id,
+            reason=f"Scheduled for execution in {delay_minutes} minutes",
+            scheduled_at=action.scheduled_at,
+        )
+    else:
+        # Execute immediately
+        action.status = "executed"
+        action.executed_at = datetime.now(timezone.utc)
+        
+        # Update order status to recovered and cancel other pending actions
+        order = await session.get(Order, order_id)
+        if order:
+            order.status = "recovered"
+        
+        # Cancel other pending actions for this order
+        await cancel_pending_actions(session, order_id, "Payment recovered via recovery action")
+        
+        await session.flush()
+        
+        return ActionResult(
+            success=True,
+            action_id=action.action_id,
+            scheduled_at=action.scheduled_at,
+        )
 
 
 async def schedule_recovery_action(
@@ -148,8 +173,58 @@ async def schedule_recovery_action(
     
     action = await create_recovery_action(session, order_id, action_type, expected_value)
     
+    if delay_minutes > 0:
+        action.scheduled_at = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+    
     return ActionResult(
         success=True,
         action_id=action.action_id,
         scheduled_at=action.scheduled_at,
     )
+
+
+async def complete_recovery_action(
+    session: AsyncSession,
+    action_id: int,
+    success: bool = True,
+    reason: Optional[str] = None,
+) -> ActionResult:
+    """Mark a recovery action as completed and update order status.
+    
+    If success=True, marks order as recovered and cancels other pending actions.
+    If success=False, marks action as failed.
+    """
+    action = await session.get(RecoveryAction, action_id)
+    if not action:
+        return ActionResult(success=False, reason="Action not found")
+    
+    if success:
+        action.status = "executed"
+        action.executed_at = datetime.now(timezone.utc)
+        action.reason = reason or "Recovery successful"
+        
+        # Update order status to recovered
+        order = await session.get(Order, action.order_id)
+        if order:
+            order.status = "recovered"
+        
+        # Cancel other pending actions for this order
+        await cancel_pending_actions(session, action.order_id, "Payment recovered via recovery action")
+        
+        await session.flush()
+        
+        return ActionResult(
+            success=True,
+            action_id=action.action_id,
+            reason="Recovery completed successfully",
+        )
+    else:
+        action.status = "failed"
+        action.reason = reason or "Recovery failed"
+        await session.flush()
+        
+        return ActionResult(
+            success=False,
+            action_id=action.action_id,
+            reason=action.reason,
+        )

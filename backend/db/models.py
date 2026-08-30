@@ -11,16 +11,30 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
+    TypeDecorator,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.db.session import Base
+
+
+class TZDateTime(TypeDecorator):
+    """Timezone-aware datetime that works with both SQLite and PostgreSQL."""
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "sqlite":
+            return dialect.type_descriptor(DateTime())
+        else:
+            return dialect.type_descriptor(TIMESTAMP(timezone=True))
 
 
 class Merchant(Base):
@@ -54,7 +68,7 @@ class Order(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String, default="INR", nullable=False)
     status: Mapped[str] = mapped_column(String, default="pending", nullable=False)  # pending, recovered, lost
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), nullable=False)
 
     merchant: Mapped["Merchant"] = relationship(back_populates="orders")
     customer: Mapped["Customer"] = relationship(back_populates="orders")
@@ -76,7 +90,7 @@ class PaymentAttempt(Base):
     error_reason: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     error_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     error_step: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), nullable=False)
 
     order: Mapped["Order"] = relationship(back_populates="payment_attempts")
 
@@ -91,8 +105,8 @@ class WebhookEvent(Base):
 
     event_id: Mapped[str] = mapped_column(String, primary_key=True)
     event_type: Mapped[str] = mapped_column(String, nullable=False)
-    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    processed_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime, nullable=True)
 
     __table_args__ = (
         Index("ix_webhook_events_processed_at", "processed_at"),
@@ -106,8 +120,8 @@ class AgentRun(Base):
     order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.order_id"), nullable=False)
     status: Mapped[str] = mapped_column(String, default="running", nullable=False)  # running, completed, failed
     current_stage: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), nullable=False)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime, nullable=True)
     final_action: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     final_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -118,13 +132,13 @@ class AgentRun(Base):
 class AgentEvent(Base):
     __tablename__ = "agent_events"
 
-    event_seq: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    event_seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(String, ForeignKey("agent_runs.run_id"), nullable=False)
     order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.order_id"), nullable=False)
     agent_stage: Mapped[str] = mapped_column(String, nullable=False)
     event_type: Mapped[str] = mapped_column(String, nullable=False)
-    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), nullable=False)
 
     run: Mapped["AgentRun"] = relationship(back_populates="events")
 
@@ -138,14 +152,14 @@ class AgentEvent(Base):
 class RecoveryAction(Base):
     __tablename__ = "recovery_actions"
 
-    action_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    action_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.order_id"), nullable=False)
     action_type: Mapped[str] = mapped_column(String, nullable=False)
     expected_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     status: Mapped[str] = mapped_column(String, default="scheduled", nullable=False)  # scheduled, executed, cancelled
-    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), nullable=False)
+    executed_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime, nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime, nullable=True)
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     order: Mapped["Order"] = relationship(back_populates="recovery_actions")

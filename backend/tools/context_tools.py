@@ -60,7 +60,7 @@ async def get_order_context(order_id: str, session: AsyncSession) -> Dict[str, A
             "customer_id": customer.customer_id if customer else None,
             "recovery_propensity": float(customer.recovery_propensity) if customer else 0.5,
             "payment_method_preference": customer.payment_method_preference if customer else None,
-            "historical_success_rate": float(customer.historical_success_rate) if customer else None,
+            "historical_success_rate": float(customer.historical_success_rate) if customer and customer.historical_success_rate is not None else None,
             "customer_value": float(customer.customer_value) if customer else 10000,
         } if customer else None,
         "latest_error": attempts[-1].error_reason if attempts else None,

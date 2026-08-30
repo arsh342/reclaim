@@ -1,11 +1,13 @@
 """FastAPI application."""
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.config import settings
-from backend.db.session import init_db
+from backend.db.session import init_db, get_session
 from backend.api.routes import router as api_router
 from backend.api.sse import router as sse_router
 
@@ -44,8 +46,23 @@ async def root():
 
 
 @app.get("/health")
-async def health():
-    return {"status": "healthy"}
+async def health(db: AsyncSession = Depends(get_session)):
+    """Health check with database connectivity."""
+    try:
+        # Check database connectivity
+        await db.execute(text("SELECT 1"))
+        db_status = "healthy"
+    except Exception:
+        db_status = "unhealthy"
+    
+    return {
+        "status": "healthy" if db_status == "healthy" else "degraded",
+        "checks": {
+            "database": db_status,
+            "api": "healthy",
+        },
+        "version": "1.0.0",
+    }
 
 
 # Mount MCP server at /mcp

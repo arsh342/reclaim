@@ -2,7 +2,7 @@
 
 from enum import Enum
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 
@@ -26,7 +26,7 @@ class RunState:
     order_id: str
     current_stage: AgentStage = AgentStage.RECEIVED
     status: str = "running"
-    started_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: Optional[datetime] = None
     diagnosis: Optional[Dict[str, Any]] = None
     candidates: List[Dict[str, Any]] = field(default_factory=list)

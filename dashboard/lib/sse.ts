@@ -19,6 +19,8 @@ export class AgentEventStream {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
+  private shouldReconnect = true;
+  private runCompleted = false;
 
   constructor(runId: string) {
     this.runId = runId;
@@ -37,6 +39,16 @@ export class AgentEventStream {
       this.eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          
+          // Check if run is completed/failed to stop reconnecting
+          if (data.payload && typeof data.payload === 'object') {
+            const payload = data.payload as Record<string, unknown>;
+            if (payload.status === 'completed' || payload.status === 'failed') {
+              this.runCompleted = true;
+              this.shouldReconnect = false;
+            }
+          }
+          
           this.handlers.forEach((handler) => handler(data));
         } catch (e) {
           console.error('Failed to parse SSE event:', e);
@@ -44,6 +56,10 @@ export class AgentEventStream {
       };
 
       this.eventSource.onerror = () => {
+        if (this.runCompleted || !this.shouldReconnect) {
+          this.disconnect();
+          return;
+        }
         this.eventSource?.close();
         this.attemptReconnect();
       };
@@ -51,8 +67,9 @@ export class AgentEventStream {
   }
 
   private attemptReconnect() {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('Max reconnect attempts reached');
+    if (this.reconnectAttempts >= this.maxReconnectAttempts || this.runCompleted) {
+      console.error('Max reconnect attempts reached or run completed');
+      this.disconnect();
       return;
     }
 
@@ -70,6 +87,7 @@ export class AgentEventStream {
   }
 
   disconnect() {
+    this.shouldReconnect = false;
     this.eventSource?.close();
     this.eventSource = null;
     this.handlers.clear();

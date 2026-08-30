@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,12 +32,38 @@ class RecoveryPlan:
     stop_conditions: List[str]
 
 
+def _normalize_plan(plan: Union[dict, RecoveryPlan]) -> RecoveryPlan:
+    """Convert dict plan to RecoveryPlan dataclass."""
+    if isinstance(plan, RecoveryPlan):
+        return plan
+    
+    # Convert dict to RecoveryPlan
+    steps = []
+    for step in plan.get("steps", []):
+        if isinstance(step, dict):
+            steps.append(PlanStep(
+                action=step.get("action", ""),
+                delay_minutes=step.get("delay_minutes", 0),
+                condition=step.get("condition"),
+                params=step.get("params", {}),
+            ))
+        else:
+            steps.append(step)
+    
+    return RecoveryPlan(
+        objective=plan.get("objective", ""),
+        steps=steps,
+        stop_conditions=plan.get("stop_conditions", []),
+    )
+
+
 async def validate_plan(
     session: AsyncSession,
-    plan: RecoveryPlan,
+    plan: Union[dict, RecoveryPlan],
     order_id: str,
 ) -> ValidationResult:
     """Validate a recovery plan against policy."""
+    plan_obj = _normalize_plan(plan)
     allowed = await get_allowed_actions(session, order_id)
     
     if not allowed:
@@ -50,7 +76,7 @@ async def validate_plan(
     always_allowed = {NO_ACTION, HUMAN_REVIEW}
     
     filtered_steps = []
-    for step in plan.steps:
+    for step in plan_obj.steps:
         if step.action in allowed or step.action in always_allowed:
             # For immediate actions, re-check policy
             if step.delay_minutes == 0:
@@ -79,7 +105,7 @@ async def validate_plan(
 
 async def validate_and_score_plan(
     session: AsyncSession,
-    plan: RecoveryPlan,
+    plan: Union[dict, RecoveryPlan],
     order_id: str,
 ) -> tuple[ValidationResult, List[dict]]:
     """Validate plan and calculate ERV for each step."""

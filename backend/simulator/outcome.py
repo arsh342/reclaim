@@ -45,8 +45,8 @@ def simulate_outcome(
     """Simulate whether recovery succeeds (for evaluation)."""
     import random
     
-    if seed is not None:
-        random.seed(seed)
+    # Use local Random instance to avoid affecting global state
+    rng = random.Random(seed) if seed is not None else random
     
     config = load_config()
     error_reason = attempt.error_reason or "unknown"
@@ -57,4 +57,4 @@ def simulate_outcome(
     probability = base_rate * method_factor * action_fit
     probability = max(0.0, min(0.95, probability))
     
-    return random.random() < probability
+    return rng.random() < probability

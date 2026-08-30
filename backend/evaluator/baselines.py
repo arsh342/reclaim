@@ -19,7 +19,8 @@ from backend.policy.constraints import (
     HUMAN_REVIEW,
 )
 from backend.policy.scoring import calculate_expected_value
-from backend.executor.executor import execute_recovery_action, cancel_pending_actions
+from backend.executor.executor import cancel_pending_actions
+from backend.simulator.outcome import simulate_outcome
 
 
 class BasePolicy(ABC):
@@ -113,61 +114,37 @@ async def simulate_policy(
     for order in orders:
         total_revenue_at_risk += order.amount
         
-        # Simulate payment attempts until recovery or max retries
-        attempt_number = 0
-        max_attempts = 3
+        # Get actual attempts for this order
+        stmt = (
+            select(PaymentAttempt)
+            .where(PaymentAttempt.order_id == order.order_id)
+            .order_by(PaymentAttempt.attempt_number)
+        )
+        result = await session.execute(stmt)
+        attempts = result.scalars().all()
         
-        while attempt_number < max_attempts:
-            attempt_number += 1
+        if not attempts:
+            continue
+        
+        # Simulate the actual attempt sequence
+        for attempt in attempts:
+            action = await policy.decide_action(session, order.order_id)
+            if action is None:
+                break
             
-            # Simulate failure for first attempts
-            if attempt_number < max_attempts:
-                action = await policy.decide_action(session, order.order_id)
-                if action is None:
-                    break
+            if action in {RETRY_NOW, RETRY_DELAYED, PAYMENT_LINK, WHATSAPP_NUDGE, ALTERNATE_METHOD}:
+                total_interventions += 1
+                if action in {PAYMENT_LINK, WHATSAPP_NUDGE}:
+                    contact_count += 1
                 
-                if action in {RETRY_NOW, RETRY_DELAYED, PAYMENT_LINK, WHATSAPP_NUDGE, ALTERNATE_METHOD}:
-                    total_interventions += 1
-                    if action in {PAYMENT_LINK, WHATSAPP_NUDGE}:
-                        contact_count += 1
-                    
-                    # Simulate outcome
-                    from backend.simulator.outcome import simulate_outcome
-                    # Create mock attempt
-                    mock_attempt = PaymentAttempt(
-                        payment_id=f"pay_{order.order_id}_{attempt_number}",
-                        order_id=order.order_id,
-                        attempt_number=attempt_number,
-                        method="card",
-                        status="failed",
-                        error_reason="issuer_timeout",
-                    )
-                    success = simulate_outcome(order, mock_attempt, action, seed=seed + attempt_number)
-                    if success:
-                        recovered_revenue += order.amount
-                        recovered_count += 1
-                        # Cancel any pending actions
-                        await cancel_pending_actions(session, order.order_id, "Recovery successful")
-                        break
-                elif action == NO_ACTION:
+                # Simulate outcome using actual attempt data
+                success = simulate_outcome(order, attempt, action, seed=seed + attempt.attempt_number)
+                if success:
+                    recovered_revenue += order.amount
+                    recovered_count += 1
+                    await cancel_pending_actions(session, order.order_id, "Recovery successful")
                     break
-            else:
-                # Final attempt - check if captured
-                action = await policy.decide_action(session, order.order_id)
-                if action and action in {RETRY_NOW, RETRY_DELAYED}:
-                    from backend.simulator.outcome import simulate_outcome
-                    mock_attempt = PaymentAttempt(
-                        payment_id=f"pay_{order.order_id}_{attempt_number}",
-                        order_id=order.order_id,
-                        attempt_number=attempt_number,
-                        method="card",
-                        status="failed",
-                        error_reason="issuer_timeout",
-                    )
-                    success = simulate_outcome(order, mock_attempt, action, seed=seed + attempt_number)
-                    if success:
-                        recovered_revenue += order.amount
-                        recovered_count += 1
+            elif action == NO_ACTION:
                 break
     
     return {
@@ -177,6 +154,6 @@ async def simulate_policy(
         "total_revenue_at_risk": float(total_revenue_at_risk),
         "unnecessary_interventions": total_interventions - recovered_count,
         "contact_count": contact_count,
-        "avg_time_to_resolution_hours": 2.0,  # Simplified
+        "avg_time_to_resolution_hours": 2.0,
         "policy_rejections": policy_rejections,
     }

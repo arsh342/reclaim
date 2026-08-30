@@ -5,29 +5,7 @@ import { Server, Database, Shield, Terminal, Link2, Copy, CheckCircle, XCircle, 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { api } from "@/lib/api";
-
-interface MCPTool {
-  name: string;
-  description: string;
-  read_only: boolean;
-  financial_side_effect: boolean;
-}
-
-interface MCPStatus {
-  status: string;
-  endpoint: string;
-  transport: string;
-  protocol: string;
-  tools_count: number;
-}
-
-interface MCPActivity {
-  timestamp: string;
-  tool: string;
-  duration_ms: number;
-  status: "OK" | "APPROVED" | "REJECTED" | "ERROR";
-}
+import { api, MCPStatus, MCPTool, MCPActivity } from "@/lib/api";
 
 export default function MCPPage() {
   const [status, setStatus] = useState<MCPStatus | null>(null);
@@ -36,34 +14,9 @@ export default function MCPPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // In real implementation, these would be API calls
-    // For now, use mock data
-    setStatus({
-      status: "online",
-      endpoint: "/mcp",
-      transport: "Streamable HTTP",
-      protocol: "MCP v2",
-      tools_count: 9,
-    });
-    setTools([
-      { name: "reclaim_get_order_context", description: "Retrieve order, customer, merchant, and payment attempts", read_only: true, financial_side_effect: false },
-      { name: "reclaim_get_allowed_actions", description: "Retrieve actions allowed by policy", read_only: true, financial_side_effect: false },
-      { name: "reclaim_estimate_recovery", description: "Calculate recovery probability and expected recovery value", read_only: true, financial_side_effect: false },
-      { name: "reclaim_get_agent_run", description: "Retrieve an agent run", read_only: true, financial_side_effect: false },
-      { name: "reclaim_get_agent_events", description: "Retrieve agent execution events", read_only: true, financial_side_effect: false },
-      { name: "reclaim_get_evaluation_summary", description: "Retrieve baseline comparison metrics", read_only: true, financial_side_effect: false },
-      { name: "reclaim_start_recovery_run", description: "Start a bounded recovery workflow", read_only: false, financial_side_effect: true },
-      { name: "reclaim_execute_recovery_action", description: "Execute a permitted recovery action", read_only: false, financial_side_effect: true },
-      { name: "reclaim_cancel_pending_action", description: "Cancel a scheduled action", read_only: false, financial_side_effect: true },
-    ]);
-    setActivity([
-      { timestamp: new Date(Date.now() - 1000 * 60 * 5).toISOString(), tool: "reclaim_get_order_context", duration_ms: 84, status: "OK" },
-      { timestamp: new Date(Date.now() - 1000 * 60 * 4).toISOString(), tool: "reclaim_estimate_recovery", duration_ms: 91, status: "OK" },
-      { timestamp: new Date(Date.now() - 1000 * 60 * 2).toISOString(), tool: "reclaim_execute_recovery_action", duration_ms: 112, status: "APPROVED" },
-      { timestamp: new Date(Date.now() - 1000 * 30).toISOString(), tool: "reclaim_get_allowed_actions", duration_ms: 45, status: "OK" },
-      { timestamp: new Date(Date.now() - 1000 * 10).toISOString(), tool: "reclaim_execute_recovery_action", duration_ms: 67, status: "REJECTED" },
-    ]);
-    setLoading(false);
+    api.mcpStatus().then(setStatus).catch(console.error);
+    api.mcpTools().then(setTools).catch(console.error);
+    api.mcpActivity().then(setActivity).catch(console.error).finally(() => setLoading(false));
   }, []);
 
   const copyToClipboard = (text: string) => {

@@ -1,21 +1,56 @@
 version: '3.8'
 
 services:
+  # PostgreSQL for production-like testing
   postgres:
-    image: postgres:16
+    image: postgres:16-alpine
     environment:
+      POSTGRES_DB: reclaim
       POSTGRES_USER: reclaim
       POSTGRES_PASSWORD: reclaim
-      POSTGRES_DB: reclaim
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U reclaim -d reclaim"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
 
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://reclaim:reclaim@postgres:5432/reclaim
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=gemini-1.5-flash
+      - CORS_ORIGINS=http://localhost:3000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 volumes:
-  pgdata:
+  postgres_data:

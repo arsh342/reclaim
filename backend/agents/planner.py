@@ -59,8 +59,34 @@ async def create_recovery_plan(
         "counterfactuals": counterfactuals,
     }
     
-    return await llm.structured_generate(
+    result = await llm.structured_generate(
         system=PLAN_SYSTEM_PROMPT,
         input=input_data,
         schema=PLAN_SCHEMA,
     )
+    
+    # Fallback: if LLM returns empty steps, create a default plan based on best counterfactual
+    steps = result.get("steps", [])
+    if not steps and counterfactuals:
+        # Sort counterfactuals by expected value and pick the best
+        best = max(counterfactuals, key=lambda c: c.get("expected_value", 0))
+        steps = [{
+            "action": best.get("action", "RETRY_DELAYED"),
+            "delay_minutes": 240,
+            "condition": None,
+            "params": {}
+        }]
+    
+    if not steps:
+        steps = [{
+            "action": "RETRY_DELAYED",
+            "delay_minutes": 240,
+            "condition": None,
+            "params": {}
+        }]
+    
+    return {
+        "objective": result.get("objective", "maximize_expected_recovered_revenue"),
+        "steps": steps,
+        "stop_conditions": result.get("stop_conditions", ["order_recovered", "hard_decline", "contact_budget_exhausted", "max_retries_exceeded"])
+    }

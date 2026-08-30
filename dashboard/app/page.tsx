@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { TrendingUp, DollarSign, RefreshCw, Activity, AlertTriangle } from "lucide-react";
+import { useEffect, useState, useCallback } from "react";
+import { TrendingUp, DollarSign, RefreshCw, Activity, AlertTriangle, RotateCcw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,29 +35,88 @@ function KPICard({ title, value, change, icon, variant = "default" }: KPICardPro
   );
 }
 
+const CACHE_KEY = "reclaim_overview_cache";
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+interface CachedData {
+  evalData: EvalSummary | null;
+  recentOrders: OrderSummary[];
+  timestamp: number;
+}
+
+function getCachedData(): CachedData | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (!cached) return null;
+    const parsed = JSON.parse(cached);
+    if (Date.now() - parsed.timestamp > CACHE_DURATION) {
+      localStorage.removeItem(CACHE_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function setCachedData(evalData: EvalSummary | null, recentOrders: OrderSummary[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({
+      evalData,
+      recentOrders,
+      timestamp: Date.now(),
+    }));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 export default function OverviewPage() {
   const [evalData, setEvalData] = useState<EvalSummary | null>(null);
   const [recentOrders, setRecentOrders] = useState<OrderSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        const [evalResult, ordersResult] = await Promise.all([
-          api.evalSummary(2000, 42),
-          api.orders(),
-        ]);
-        setEvalData(evalResult);
-        setRecentOrders(ordersResult.slice(0, 5));
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to fetch data");
-      } finally {
+  const fetchData = useCallback(async (forceRefresh = false) => {
+    setLoading(true);
+    setError(null);
+
+    // Try cache first (unless forced refresh)
+    if (!forceRefresh) {
+      const cached = getCachedData();
+      if (cached) {
+        setEvalData(cached.evalData);
+        setRecentOrders(cached.recentOrders);
+        setLastUpdated(new Date(cached.timestamp));
         setLoading(false);
+        return;
       }
     }
-    fetchData();
+
+    try {
+      const [evalResult, ordersResult] = await Promise.all([
+        api.evalSummary(2000, 42),
+        api.orders(),
+      ]);
+      setEvalData(evalResult);
+      setRecentOrders(ordersResult.slice(0, 5));
+      setLastUpdated(new Date());
+      setCachedData(evalResult, ordersResult.slice(0, 5));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to fetch data");
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const handleRefresh = () => fetchData(true);
 
   if (loading) {
     return (
@@ -71,6 +130,10 @@ export default function OverviewPage() {
     return (
       <div className="p-6 text-center text-destructive">
         Error: {error}
+        <Button variant="outline" className="mt-4" onClick={handleRefresh}>
+          <RotateCcw className="h-4 w-4 mr-2" />
+          Retry
+        </Button>
       </div>
     );
   }
@@ -80,9 +143,22 @@ export default function OverviewPage() {
 
   return (
     <div className="container mx-auto py-8 px-4">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">Overview</h1>
-        <p className="text-muted-foreground mt-1">Revenue recovery agent control center</p>
+      <div className="mb-8 flex flex-row items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Overview</h1>
+          <p className="text-muted-foreground mt-1">Revenue recovery agent control center</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {lastUpdated && (
+            <span className="text-xs text-muted-foreground">
+              Updated {lastUpdated.toLocaleTimeString()}
+            </span>
+          )}
+          <Button variant="outline" size="sm" onClick={handleRefresh}>
+            <RotateCcw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* KPI Row */}

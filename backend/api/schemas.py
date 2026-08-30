@@ -168,3 +168,39 @@ class SimulateWebhookRequest(BaseModel):
     event: str = Field(..., pattern="^(payment\\.failed|payment\\.captured)$")
     contains: List[str]
     payload: PaymentPayload
+
+
+class MCPStatus(BaseModel):
+    status: str
+    endpoint: str
+    transport: str
+    protocol: str
+    tools_count: int
+
+
+class MCPTool(BaseModel):
+    name: str
+    description: str
+    read_only: bool
+    financial_side_effect: bool
+
+
+class MCPActivity(BaseModel):
+    timestamp: str
+    tool: str
+    duration_ms: int
+    status: str
+    order_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class CompleteRecoveryActionRequest(BaseModel):
+    action_id: int
+    success: bool = True
+    reason: Optional[str] = None
+
+
+class CompleteRecoveryActionResponse(BaseModel):
+    success: bool
+    action_id: Optional[int] = None
+    reason: Optional[str] = None

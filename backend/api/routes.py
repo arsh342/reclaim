@@ -29,11 +29,19 @@ from backend.api.schemas import (
     PolicyMetrics,
     HealthResponse,
     SimulateWebhookRequest,
+    MCPStatus,
+    MCPTool,
+    MCPActivity,
+    CompleteRecoveryActionRequest,
+    CompleteRecoveryActionResponse,
 )
 from backend.api.webhooks import ingest_webhook
 from backend.policy.constraints import get_allowed_actions
 from backend.evaluator.runner import run_evaluation
 from backend.evaluator.baselines import AlwaysRetryPolicy, ReclaimPolicy
+from backend.agent_runtime.orchestrator import run_agent
+from backend.mcp_server.activity import get_recent_activity, activity_stream
+from backend.executor.executor import complete_recovery_action
 
 
 router = APIRouter()
@@ -59,7 +67,9 @@ async def list_orders(
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session_dependency),
 ):
-    stmt = select(Order).order_by(Order.created_at.desc()).offset(offset).limit(limit)
+    # Filter out evaluation orders (merchant_eval_*)
+    from sqlalchemy import not_
+    stmt = select(Order).where(not_(Order.merchant_id.like("merchant_eval%"))).order_by(Order.created_at.desc()).offset(offset).limit(limit)
     result = await session.execute(stmt)
     orders = result.scalars().all()
     
@@ -114,6 +124,39 @@ async def get_order(
     run_result = await session.execute(run_stmt)
     runs = run_result.scalars().all()
     
+    # Build decision analysis from latest agent run
+    decision_analysis = None
+    if runs:
+        latest_run = runs[0]
+        event_stmt = select(AgentEvent).where(AgentEvent.run_id == latest_run.run_id).order_by(AgentEvent.event_seq)
+        event_result = await session.execute(event_stmt)
+        events = event_result.scalars().all()
+        
+        # Extract diagnosis, candidates, and chosen action from events
+        diagnosis = {}
+        candidates = []
+        chosen_action = None
+        stop_conditions = []
+        
+        for event in events:
+            payload = event.payload
+            if event.event_type == "agent.stage.completed" and event.agent_stage == "DIAGNOSING":
+                diagnosis = payload.get("diagnosis", {})
+            elif event.event_type == "agent.stage.completed" and event.agent_stage == "GENERATING_CANDIDATES":
+                candidates = payload.get("candidates", [])
+            elif event.event_type == "agent.stage.completed" and event.agent_stage == "PLANNING":
+                chosen_action = payload.get("chosen_action")
+            elif event.event_type == "agent.policy.rejected":
+                stop_conditions.append(payload.get("reason", "Policy rejection"))
+        
+        if diagnosis or candidates or chosen_action:
+            decision_analysis = {
+                "diagnosis": diagnosis,
+                "candidates": candidates,
+                "chosen_action": chosen_action,
+                "stop_conditions": stop_conditions,
+            }
+    
     return OrderDetail(
         order=OrderSummary(
             order_id=order.order_id,
@@ -166,6 +209,7 @@ async def get_order(
             )
             for r in runs
         ],
+        decision_analysis=decision_analysis,
     )
 
 
@@ -245,3 +289,180 @@ async def get_agent_events(
         )
         for e in events
     ]
+
+
+@router.post("/agent-runs/{order_id}/start", response_model=AgentRunSchema)
+async def start_agent_run(
+    order_id: str,
+    session: AsyncSession = Depends(get_session_dependency),
+):
+    """Start an agent run for an order."""
+    state = await run_agent(session, order_id)
+    
+    return AgentRunSchema(
+        run_id=state.run_id,
+        order_id=state.order_id,
+        status=state.status,
+        current_stage=state.current_stage.value,
+        started_at=state.started_at,
+        completed_at=state.completed_at,
+        final_action=state.final_action,
+        final_reason=state.final_reason,
+    )
+
+
+@router.post("/agent-runs/{run_id}/replay", response_model=AgentRunSchema)
+async def replay_agent_run(
+    run_id: str,
+    session: AsyncSession = Depends(get_session_dependency),
+):
+    """Replay an agent run for demo purposes."""
+    # Get the original run to find the order
+    original_run = await session.get(AgentRun, run_id)
+    if not original_run:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    
+    # Start a new agent run for the same order
+    state = await run_agent(session, original_run.order_id)
+    
+    return AgentRunSchema(
+        run_id=state.run_id,
+        order_id=state.order_id,
+        status=state.status,
+        current_stage=state.current_stage.value,
+        started_at=state.started_at,
+        completed_at=state.completed_at,
+        final_action=state.final_action,
+        final_reason=state.final_reason,
+    )
+
+
+@router.post("/recovery-actions/{action_id}/complete", response_model=CompleteRecoveryActionResponse)
+async def complete_recovery_action_endpoint(
+    action_id: int,
+    request: CompleteRecoveryActionRequest,
+    session: AsyncSession = Depends(get_session_dependency),
+):
+    """Mark a recovery action as completed (success or failure) and update order status."""
+    result = await complete_recovery_action(
+        session,
+        request.action_id,
+        success=request.success,
+        reason=request.reason,
+    )
+    
+    return CompleteRecoveryActionResponse(
+        success=result.success,
+        action_id=result.action_id,
+        reason=result.reason,
+    )
+
+
+@router.get("/mcp/status", response_model=MCPStatus)
+async def get_mcp_status():
+    """Get MCP server status."""
+    return MCPStatus(
+        status="online",
+        endpoint="/mcp",
+        transport="Streamable HTTP",
+        protocol="MCP v2",
+        tools_count=9,
+    )
+
+
+@router.get("/mcp/tools", response_model=List[MCPTool])
+async def get_mcp_tools():
+    """Get MCP tool catalog."""
+    return [
+        MCPTool(
+            name="reclaim_get_order_context",
+            description="Retrieve order, customer, merchant, and payment attempts",
+            read_only=True,
+            financial_side_effect=False,
+        ),
+        MCPTool(
+            name="reclaim_get_allowed_actions",
+            description="Retrieve actions allowed by policy",
+            read_only=True,
+            financial_side_effect=False,
+        ),
+        MCPTool(
+            name="reclaim_estimate_recovery",
+            description="Calculate recovery probability and expected recovery value",
+            read_only=True,
+            financial_side_effect=False,
+        ),
+        MCPTool(
+            name="reclaim_get_agent_run",
+            description="Retrieve an agent run",
+            read_only=True,
+            financial_side_effect=False,
+        ),
+        MCPTool(
+            name="reclaim_get_agent_events",
+            description="Retrieve agent execution events",
+            read_only=True,
+            financial_side_effect=False,
+        ),
+        MCPTool(
+            name="reclaim_get_evaluation_summary",
+            description="Retrieve baseline comparison metrics",
+            read_only=True,
+            financial_side_effect=False,
+        ),
+        MCPTool(
+            name="reclaim_start_recovery_run",
+            description="Start a bounded recovery workflow",
+            read_only=False,
+            financial_side_effect=True,
+        ),
+        MCPTool(
+            name="reclaim_execute_recovery_action",
+            description="Execute a permitted recovery action",
+            read_only=False,
+            financial_side_effect=True,
+        ),
+        MCPTool(
+            name="reclaim_cancel_pending_action",
+            description="Cancel a scheduled action",
+            read_only=False,
+            financial_side_effect=True,
+        ),
+    ]
+
+
+@router.get("/mcp/activity", response_model=List[MCPActivity])
+async def get_mcp_activity(limit: int = 50):
+    """Get recent MCP activity."""
+    from backend.mcp_server.activity import get_recent_activity
+    activities = get_recent_activity(limit)
+    return [
+        MCPActivity(
+            timestamp=a.timestamp,
+            tool=a.tool,
+            duration_ms=a.duration_ms,
+            status=a.status,
+            order_id=a.order_id,
+            error=a.error,
+        )
+        for a in activities
+    ]
+
+
+@router.get("/mcp/activity/stream")
+async def stream_mcp_activity():
+    """Stream MCP activity via SSE."""
+    from fastapi.responses import StreamingResponse
+    
+    async def event_generator():
+        async for activity in activity_stream():
+            yield f"data: {activity.model_dump_json()}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
