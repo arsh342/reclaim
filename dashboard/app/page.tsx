@@ -98,7 +98,7 @@ export default function OverviewPage() {
 
     try {
       const [evalResult, ordersResult] = await Promise.all([
-        api.evalSummary(2000, 42),
+        api.evalSummary(200, 42),
         api.orders(),
       ]);
       setEvalData(evalResult);

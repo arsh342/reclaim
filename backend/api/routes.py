@@ -1,5 +1,6 @@
 """API routes."""
 
+import time
 from decimal import Decimal
 from typing import List, Optional
 
@@ -213,13 +214,30 @@ async def get_order(
     )
 
 
+# In-memory cache for eval summary
+_eval_cache: dict[str, tuple[EvalSummary, float]] = {}
+_EVAL_CACHE_TTL = 300  # 5 minutes
+
 @router.get("/eval/summary", response_model=EvalSummary)
 async def get_eval_summary(
-    n_orders: int = Query(2000, ge=100, le=5000),
+    n_orders: int = Query(200, ge=50, le=500),  # Reduced default from 2000
     seed: int = Query(42, ge=0),
     session: AsyncSession = Depends(get_session_dependency),
 ):
+    cache_key = f"{n_orders}:{seed}"
+    now = time.time()
+    
+    # Check cache
+    if cache_key in _eval_cache:
+        cached_result, cached_time = _eval_cache[cache_key]
+        if now - cached_time < _EVAL_CACHE_TTL:
+            return cached_result
+    
     result = await run_evaluation(session, n_orders, seed)
+    
+    # Cache result
+    _eval_cache[cache_key] = (result, now)
+    
     return result
 
 

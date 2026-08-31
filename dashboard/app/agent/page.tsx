@@ -229,6 +229,20 @@ export default function AgentPage() {
             ? {
                 ...prev,
                 events: [...prev.events, event],
+                run: {
+                  ...prev.run,
+                  // Update current_stage from stage events
+                  current_stage:
+                    event.event_type === "agent.stage.started"
+                      ? (event.agent_stage as AgentStage)
+                      : prev.run.current_stage,
+                  status:
+                    event.payload?.status === "completed"
+                      ? "completed"
+                      : event.payload?.status === "failed"
+                      ? "failed"
+                      : prev.run.status,
+                },
               }
             : null
         );
