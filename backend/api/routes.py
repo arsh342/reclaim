@@ -158,27 +158,50 @@ async def get_order(
         event_result = await session.execute(event_stmt)
         events = event_result.scalars().all()
         
-        # Extract diagnosis, candidates, and chosen action from events
+        # Extract diagnosis, candidates, counterfactuals, and chosen action from events
         diagnosis = {}
         candidates = []
+        counterfactuals = []
         chosen_action = None
         stop_conditions = []
         
         for event in events:
             payload = event.payload
+            output = payload.get("output", {})
             if event.event_type == "agent.stage.completed" and event.agent_stage == "DIAGNOSING":
-                diagnosis = payload.get("diagnosis", {})
+                # Diagnosis is the entire output for DIAGNOSING stage
+                diagnosis = output
             elif event.event_type == "agent.stage.completed" and event.agent_stage == "GENERATING_CANDIDATES":
-                candidates = payload.get("candidates", [])
+                candidates = output.get("candidates", [])
+            elif event.event_type == "agent.stage.completed" and event.agent_stage == "EVALUATING_COUNTERFACTUALS":
+                counterfactuals = output.get("counterfactuals", [])
             elif event.event_type == "agent.stage.completed" and event.agent_stage == "PLANNING":
-                chosen_action = payload.get("chosen_action")
+                plan = output
+                if plan.get("steps"):
+                    chosen_action = plan["steps"][0].get("action")
             elif event.event_type == "agent.policy.rejected":
                 stop_conditions.append(payload.get("reason", "Policy rejection"))
         
-        if diagnosis or candidates or chosen_action:
+        # Merge counterfactuals (ERV scores) into candidates for display
+        enriched_candidates = []
+        for candidate in candidates:
+            action = candidate.get("action")
+            cf = next((c for c in counterfactuals if c.get("action") == action), {})
+            enriched_candidates.append({
+                "action": action,
+                "rationale": candidate.get("rationale", ""),
+                "probability": cf.get("probability", 0),
+                "expected_value": cf.get("expected_value", 0),
+                "intervention_cost": cf.get("intervention_cost", 0),
+                "friction_cost": cf.get("friction_cost", 0),
+                "risk_penalty": cf.get("risk_penalty", 0),
+                "recoverable_amount": cf.get("recoverable_amount", 0),
+            })
+        
+        if diagnosis or enriched_candidates or chosen_action:
             decision_analysis = {
                 "diagnosis": diagnosis,
-                "candidates": candidates,
+                "candidates": enriched_candidates,
                 "chosen_action": chosen_action,
                 "stop_conditions": stop_conditions,
             }
