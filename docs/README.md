@@ -1,22 +1,28 @@
-# Reclaim Documentation Index
+# Reclaim Documentation
 
-- `DOCUMENTATION.md` — product, architecture, agent runtime, Gemini, policy, frontend, deployment.
-- `MCP.md` — MCP server, tools, transports, safety, testing, deployment, and `/mcp` console.
-- `API.md` — REST and MCP interface reference.
-- `../reclaim-build-plan.md` — 14-day product/build/pitch plan.
-- `../reclaim-implementation-plan.md` — engineering checklist.
-- `../reclaim-system-design.md` — HLD/LLD, diagrams, state machines, APIs, and MCP architecture.
+This directory contains the comprehensive documentation for the Reclaim AI revenue-recovery platform.
 
-## Product interfaces
+## Files
 
-```text
-/          Overview
-/agent     Agent Control Center
-/mcp       MCP Control Center
-/docs      Documentation Portal
-/mcp       MCP Streamable HTTP endpoint (backend)
-```
+| File | Description |
+|------|-------------|
+| [DOCUMENTATION.md](DOCUMENTATION.md) | Complete system documentation (architecture, agent runtime, policy, MCP, API, deployment) |
+| [MCP.md](MCP.md) | MCP server integration guide |
+| [API.md](API.md) | REST API reference |
+| [reclaim-system-design.md](reclaim-system-design.md) | Deep system design |
+| [reclaim-implementation-plan.md](reclaim-implementation-plan.md) | Day-by-day build plan |
+| [reclaim-build-plan.md](reclaim-build-plan.md) | Build milestones |
 
-## Architectural rule
+## Quick Links
 
-Reclaim owns the agent runtime. Gemini supplies model inference. MCP provides interoperability. The dashboard provides the human control surface. All three interfaces use the same domain services, database state, policy gate, and safe executor.
+- **Start here**: [DOCUMENTATION.md](DOCUMENTATION.md)
+- **MCP integration**: [MCP.md](MCP.md)
+- **API reference**: [API.md](API.md)
+
+## Interactive Documentation
+
+The Reclaim dashboard includes a live documentation portal at `/docs` with:
+- Collapsible sidebar navigation
+- Live code examples
+- Searchable content
+- Version badges for new/updated sections

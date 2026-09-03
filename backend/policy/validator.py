@@ -65,16 +65,31 @@ async def validate_plan(
     """Validate a recovery plan against policy."""
     plan_obj = _normalize_plan(plan)
     allowed = await get_allowed_actions(session, order_id)
-    
+
+    # Always allow NO_ACTION and HUMAN_REVIEW
+    always_allowed = {NO_ACTION, HUMAN_REVIEW}
+
     if not allowed:
+        # Terminal order state: only NO_ACTION / HUMAN_REVIEW plans are valid
+        if plan_obj.steps and all(step.action in always_allowed for step in plan_obj.steps):
+            return ValidationResult(
+                approved=True,
+                reason="Terminal order state — no recovery actions permitted",
+                filtered_steps=[
+                    {
+                        "action": step.action,
+                        "delay_minutes": step.delay_minutes,
+                        "condition": step.condition,
+                        "params": step.params,
+                    }
+                    for step in plan_obj.steps
+                ],
+            )
         return ValidationResult(
             approved=False,
             reason="No actions allowed for this order",
         )
-    
-    # Always allow NO_ACTION and HUMAN_REVIEW
-    always_allowed = {NO_ACTION, HUMAN_REVIEW}
-    
+
     filtered_steps = []
     for step in plan_obj.steps:
         if step.action in allowed or step.action in always_allowed:

@@ -54,32 +54,6 @@ The MCP layer does not implement a second version of any business rule.
 
 Every side-effecting operation goes through the same safety gate and executor used by the web application.
 
-## Run Locally
-
-Install:
-
-```bash
-pip install -r requirements.txt
-```
-
-Development:
-
-```bash
-uv run mcp dev backend/mcp_server/server.py
-```
-
-Start Streamable HTTP:
-
-```bash
-python -m backend.mcp_server.server
-```
-
-Default endpoint:
-
-```text
-http://127.0.0.1:8000/mcp
-```
-
 ## Safety
 
 An MCP client cannot directly mutate payment state.
@@ -120,11 +94,32 @@ Reclaim domain tools
 
 Both paths share the same domain services.
 
+## Run Locally
+
+### Install
+```bash
+pip install -r requirements.txt
+```
+
+### Development (stdio + MCP Inspector)
+```bash
+uv run mcp dev backend/mcp_server/server.py
+```
+
+### Start Streamable HTTP
+```bash
+python -m backend.mcp_server.server
+```
+
+Default endpoint:
+```
+http://127.0.0.1:8000/mcp
+```
+
 ## Deployment
 
 Production endpoint:
-
-```text
+```
 https://<reclaim-host>/mcp
 ```
 
@@ -143,17 +138,28 @@ uv run mcp dev backend/mcp_server/server.py
 The Reclaim dashboard includes `/mcp`.
 
 It displays:
-
 - server status
 - MCP endpoint
 - transport
 - protocol version
 - tool catalog
 - read/write classification
-- live MCP activity
+- live MCP activity (SSE)
 - latency
 - policy rejections
 - safety status
 - connection instructions
 
 The page is an operational console, not a static marketing page.
+
+## Connection Example
+
+```json
+{
+  "mcpServers": {
+    "reclaim": {
+      "url": "https://your-reclaim-domain.com/mcp"
+    }
+  }
+}
+```

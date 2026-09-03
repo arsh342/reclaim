@@ -40,25 +40,34 @@ class AgentOrchestrator:
         session: AsyncSession,
         order_id: str,
         trigger_event_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> RunState:
         """Run the agent for an order."""
-        run_id = f"run_{uuid.uuid4().hex[:12]}"
+        if run_id is None:
+            run_id = f"run_{uuid.uuid4().hex[:12]}"
         state = RunState(run_id=run_id, order_id=order_id)
         
-        # Create agent_run record
-        agent_run = AgentRun(
-            run_id=run_id,
-            order_id=order_id,
-            status="running",
-            current_stage=AgentStage.RECEIVED.value,
-        )
-        session.add(agent_run)
-        await session.flush()
+        # Check if agent_run already exists (background task case)
+        agent_run = await session.get(AgentRun, run_id)
+        if agent_run is None:
+            # Create agent_run record
+            agent_run = AgentRun(
+                run_id=run_id,
+                order_id=order_id,
+                status="running",
+                current_stage=AgentStage.RECEIVED.value,
+            )
+            session.add(agent_run)
+            await session.flush()
+        else:
+            # Update existing run status
+            agent_run.status = "running"
+            agent_run.current_stage = AgentStage.RECEIVED.value
         
         try:
             # Stage 1: Context Loading
             state = await self._run_context_loading(session, state)
-            
+
             # Stage 2: Diagnosis
             state = await self._run_diagnosis(session, state)
             
@@ -204,27 +213,28 @@ class AgentOrchestrator:
         start = time.time()
         state.current_stage = AgentStage.SAFETY_CHECK
         await emit_stage_started(session, state.run_id, state.order_id, AgentStage.SAFETY_CHECK, {"plan": state.plan})
-        
+
         if not state.plan:
             state.safety_result = {"approved": False, "reason": "No plan generated"}
             await emit_policy_rejected(session, state.run_id, state.order_id, "none", "No plan generated")
+            await emit_stage_completed(session, state.run_id, state.order_id, AgentStage.SAFETY_CHECK, state.safety_result, int((time.time() - start) * 1000))
             return state
-        
+
         validation = await validate_plan(session, state.plan, state.order_id)
         state.safety_result = {
             "approved": validation.approved,
             "reason": validation.reason,
             "filtered_steps": validation.filtered_steps,
         }
-        
+
         if not validation.approved:
             first_action = "unknown"
             if state.plan and state.plan.get("steps"):
                 first_action = state.plan["steps"][0].get("action", "unknown")
             await emit_policy_rejected(session, state.run_id, state.order_id, first_action, validation.reason or "Unknown")
-        else:
-            await emit_stage_completed(session, state.run_id, state.order_id, AgentStage.SAFETY_CHECK, state.safety_result, int((time.time() - start) * 1000))
-        
+
+        await emit_stage_completed(session, state.run_id, state.order_id, AgentStage.SAFETY_CHECK, state.safety_result, int((time.time() - start) * 1000))
+
         return state
     
     async def _run_execution(self, session: AsyncSession, state: RunState) -> RunState:
@@ -283,7 +293,8 @@ async def run_agent(
     session: AsyncSession,
     order_id: str,
     llm_provider: Optional[LLMProvider] = None,
+    run_id: Optional[str] = None,
 ) -> RunState:
     """Convenience function to run agent."""
     orchestrator = AgentOrchestrator(llm_provider)
-    return await orchestrator.run(session, order_id)
+    return await orchestrator.run(session, order_id, run_id=run_id)

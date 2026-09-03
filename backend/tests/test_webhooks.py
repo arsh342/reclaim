@@ -44,7 +44,7 @@ async def test_ingest_payment_failed(db_session: AsyncSession):
     order = await db_session.get(Order, "order_001")
     assert order is not None
     assert order.amount == 5000
-    assert order.status == "pending"
+    assert order.status == "failed"
     
     # Verify payment attempt created
     attempt = await db_session.get(PaymentAttempt, "pay_001")

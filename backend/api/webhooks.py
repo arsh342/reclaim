@@ -106,6 +106,10 @@ async def ingest_webhook(
         )
         session.add(attempt)
         
+        # Update order status to reflect failed payment
+        if order.status == "pending":
+            order.status = "failed"
+        
     elif webhook.event == "payment.captured":
         # Update payment attempt
         attempt = await session.get(PaymentAttempt, payment.id)

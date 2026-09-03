@@ -1,16 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight, FileText, BookOpen, Code, Server, Shield, Zap } from "lucide-react";
+import { ChevronRight, FileText, BookOpen, Code, Server, Shield, Zap, Activity, Wrench, GitBranch } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 interface DocSection {
   id: string;
   title: string;
   icon: React.ReactNode;
   content: string;
-  children?: DocSection[];
+  badge?: string;
+  badgeVariant?: "default" | "success" | "warning" | "destructive";
 }
 
 const DOCS: DocSection[] = [
@@ -58,19 +60,19 @@ Reclaim is an AI revenue-recovery platform for failed payments. It observes fail
 \`\`\`text
 Razorpay Event
       ↓
-Webhook Ingestion
+Webhook Ingestion (idempotent)
       ↓
-PostgreSQL State
+SQLite/PostgreSQL State
       ↓
 Reclaim Agent Runtime
       ↓
-Gemini
+Gemini (or mock provider)
       ↓
 Structured Plan
       ↓
-Policy Gate
+Policy Gate (hard constraints + ERV)
       ↓
-Safe Executor
+Safe Executor (idempotent, re-validates)
       ↓
 Payment Action
       ↓
@@ -81,26 +83,28 @@ Replan or Complete
 
 ## Components
 
-1. **Webhook Ingestion** - Idempotent event ingestion with deduplication
-2. **Agent Runtime** - State machine orchestrating the recovery flow
-3. **Gemini Provider** - LLM for diagnosis, planning, replanning
-4. **Tool Registry** - Internal tools for context, policy, execution
-5. **Policy Engine** - Hard constraints + ERV scoring
-5. **Safe Executor** - Idempotent action execution with re-validation
-6. **PostgreSQL** - Persistent state and audit trail
-7. **MCP Server** - Interoperability layer
+1. **Webhook Ingestion** - Idempotent event ingestion with deduplication by \`event_id\`
+2. **Agent Runtime** - 10-stage state machine orchestrating the recovery flow
+3. **Gemini Provider** - LLM for diagnosis, planning, replanning (with mock fallback)
+4. **Tool Registry** - Internal tools for context, policy, execution, simulation
+5. **Policy Engine** - Hard constraints + ERV scoring + validation
+6. **Safe Executor** - Idempotent action execution with policy re-validation
+7. **Database** - Persistent state and complete audit trail
+8. **MCP Server** - Interoperability layer exposing same domain services
     `,
   },
   {
     id: "agent-runtime",
     title: "Agent Runtime",
     icon: <Zap className="h-4 w-4" />,
+    badge: "Updated",
+    badgeVariant: "success",
     content: `
 # Agent Runtime
 
-The agent runtime is a Reclaim-owned state machine, not a vendor-specific agent wrapper.
+The agent runtime is a Reclaim-owned state machine, not a vendor-specific agent wrapper. Runs execute in the background with live SSE streaming.
 
-## Agent Stages
+## Agent Stages (10)
 
 \`\`\`text
 RECEIVED
@@ -116,35 +120,42 @@ EVALUATING_COUNTERFACTUALS
 PLANNING
   ↓
 SAFETY_CHECK
-  ├── rejected → REPLANNING
+  ├── rejected → REPLANNING (max 3×)
   └── approved → EXECUTING
                     ↓
               WAITING_FOR_OUTCOME
                     ↓
-              COMPLETED / REPLANNING
+              COMPLETED
 \`\`\`
 
-These are logical stages, not necessarily separate Gemini API calls.
+These are logical stages; not necessarily separate Gemini API calls.
 
 ## Runtime Responsibilities
 
-1. Create \`agent_run\`
-2. Load order, merchant, customer, and payment history
-3. Ask Gemini for structured diagnosis
-4. Ask Gemini to generate relevant candidate interventions
-5. Call deterministic tools for allowed actions and recovery estimates
-6. Give Gemini the counterfactual results
-7. Generate a bounded recovery plan
-8. Validate the plan against deterministic policy
-9. Execute only permitted actions
-10. Stream every stage to the frontend
-11. Persist the complete audit trail
-12. Replan when an action is rejected or the payment state changes
+1. Create \`agent_run\` record with unique \`run_id\`
+2. Load order, merchant, customer, and payment history via \`get_order_context\`
+3. Ask LLM for structured diagnosis (failure class, severity, recoverability)
+4. Ask LLM to generate relevant candidate interventions (respecting allowed actions)
+5. Call deterministic tools for each candidate: \`estimate_recovery\` (ERV)
+6. Give LLM the counterfactual results
+7. Generate a bounded recovery plan with stop conditions
+8. Validate the plan against deterministic policy (hard constraints + ERV)
+9. Execute only permitted actions via safe executor
+10. Stream every stage event to frontend via SSE
+11. Persist complete audit trail to \`agent_events\`
+12. Replan when an action is rejected or payment state changes
+
+## Key Improvements
+
+- **Background execution**: Runs start immediately, stream events via SSE
+- **Full pipeline on all orders**: Terminal orders execute NO_ACTION through full pipeline
+- **Live durations**: Stage durations computed from actual timestamps
+- **Auto-refresh**: Runs list updates when SSE signals completion
     `,
   },
   {
     id: "ai-boundary",
-    title: "AI Boundary",
+    title: "AI / Deterministic Boundary",
     icon: <Code className="h-4 w-4" />,
     content: `
 # AI / Deterministic Boundary
@@ -176,6 +187,14 @@ These are logical stages, not necessarily separate Gemini API calls.
 \`\`\`
 
 This prevents an LLM-generated statement such as \`retry_now\` from becoming a financial action without validation.
+
+## How It Works
+
+1. **LLM proposes** — Output is schema-validated (Pydantic/JSON Schema)
+2. **Policy gate** — Hard constraints filter forbidden actions; ERV ranks remaining
+3. **Executor re-checks** — Before execution, policy is re-evaluated against current state
+4. **Idempotency** — Every action recorded with unique constraints; duplicates rejected
+5. **Audit trail** — Every stage, tool call, policy decision, and outcome persisted
     `,
   },
   {
@@ -200,28 +219,42 @@ HUMAN_REVIEW
 ## Hard Constraints (Evaluated Before Scoring)
 
 \`\`\`python
-if order.status in {recovered, lost}:
-    no actions allowed
+# Terminal order states
+if order.status in {"recovered", "lost"}:
+    allowed = []  # only NO_ACTION/HUMAN_REVIEW via validator
 
+# Max retries exceeded
 if attempt_number > merchant.max_retries:
     forbid retry actions
 
-if error_reason in HARD_DECLINE_SET:
+# Hard decline reasons
+if error_reason in HARD_DECLINE_SET:  # card_blocked, invalid_card, stolen_card, expired_card
     forbid retry actions
 
-if daily_contact_count >= contact_budget:
-    forbid contact actions
+# Daily contact budget
+if daily_contact_count >= merchant.contact_budget_per_day:
+    forbid contact actions (PAYMENT_LINK, WHATSAPP_NUDGE)
+
+# Always allowed (validator contract)
+NO_ACTION, HUMAN_REVIEW always permitted
 \`\`\`
 
-## Expected Value (ERV)
+## Expected Recovery Value (ERV)
 
 \`\`\`text
 ERV(action) =
-    P(recovery | context, action) * recoverable_amount
-    - intervention_cost(action)
-    - friction_cost(action, attempt_number)
-    - risk_penalty(action)
+    P(recovery | context, action) × recoverable_amount
+    − intervention_cost(action)
+    − friction_cost(action, attempt_number)
+    − risk_penalty(action)
 \`\`\`
+
+Costs (configurable):
+- RETRY_NOW: intervention=₹0, friction=₹1
+- RETRY_DELAYED: intervention=₹0, friction=₹0.5
+- PAYMENT_LINK: intervention=₹5, friction=₹3
+- WHATSAPP_NUDGE: intervention=₹2, friction=₹1
+- ALTERNATE_METHOD: intervention=₹10, friction=₹5
 
 The AI may request any action, but the safe executor independently re-runs the hard-constraint gate. A forbidden action cannot execute.
     `,
@@ -230,10 +263,12 @@ The AI may request any action, but the safe executor independently re-runs the h
     id: "mcp",
     title: "MCP Server",
     icon: <Server className="h-4 w-4" />,
+    badge: "Live",
+    badgeVariant: "success",
     content: `
 # MCP Server
 
-Reclaim also works as an MCP server. MCP is an interoperability layer over the same Reclaim services.
+Reclaim exposes its revenue-recovery capabilities through the Model Context Protocol (MCP). MCP is an **interoperability layer**, not a second runtime.
 
 ## Primary Endpoint
 
@@ -241,10 +276,11 @@ Reclaim also works as an MCP server. MCP is an interoperability layer over the s
 /mcp
 \`\`\`
 
-## Primary Transport
+## Transport
 
 \`\`\`text
-Streamable HTTP
+Streamable HTTP (production)
+stdio (local development)
 \`\`\`
 
 ## Development
@@ -253,22 +289,38 @@ Streamable HTTP
 uv run mcp dev backend/mcp_server/server.py
 \`\`\`
 
-## Tool Catalog
+## Tool Catalog (9 tools)
 
-### Read-only
-- \`reclaim_get_order_context\`
-- \`reclaim_get_allowed_actions\`
-- \`reclaim_estimate_recovery\`
-- \`reclaim_get_agent_run\`
-- \`reclaim_get_agent_events\`
-- \`reclaim_get_evaluation_summary\`
+### Read-only (Safe)
+| Tool | Description |
+|------|-------------|
+| \`reclaim_get_order_context\` | Retrieve order, customer, merchant, payment attempts |
+| \`reclaim_get_allowed_actions\` | Actions allowed by deterministic policy |
+| \`reclaim_estimate_recovery\` | Recovery probability & expected recovery value |
+| \`reclaim_get_agent_run\` | Retrieve an agent run |
+| \`reclaim_get_agent_events\` | Retrieve agent execution events |
+| \`reclaim_get_evaluation_summary\` | Baseline comparison metrics |
 
 ### Guarded Side-effecting
-- \`reclaim_start_recovery_run\`
-- \`reclaim_execute_recovery_action\`
-- \`reclaim_cancel_pending_action\`
+| Tool | Description | Safety |
+|------|-------------|--------|
+| \`reclaim_start_recovery_run\` | Start a bounded recovery workflow | Policy gate + executor |
+| \`reclaim_execute_recovery_action\` | Execute a permitted recovery action | Policy re-check + idempotency |
+| \`reclaim_cancel_pending_action\` | Cancel a scheduled action | Idempotent |
 
-Every side-effecting operation goes through the same safety gate and executor used by the web application.
+Every side-effecting operation goes through the **same safety gate and executor** used by the web application. An MCP client cannot bypass policy.
+
+## Connection
+
+\`\`\`json
+{
+  "mcpServers": {
+    "reclaim": {
+      "url": "https://your-domain.com/mcp"
+    }
+  }
+}
+\`\`\`
     `,
   },
   {
@@ -281,14 +333,21 @@ Every side-effecting operation goes through the same safety gate and executor us
 | Method | Endpoint | Purpose |
 |---|---|---|
 | GET | \`/health\` | Health check |
-| GET | \`/orders\` | Order list |
-| GET | \`/orders/{order_id}\` | Order detail |
-| POST | \`/webhooks/simulate\` | Simulated webhook |
-| GET | \`/eval/summary\` | Evaluation summary |
-| GET | \`/agent-runs\` | Agent runs |
-| GET | \`/agent-runs/{run_id}\` | Run detail |
-| GET | \`/agent-runs/{run_id}/events\` | SSE event stream |
-| POST | \`/agent-runs/{run_id}/replay\` | Replay run for demo |
+| GET | \`/api/orders\` | Order list (excludes eval orders) |
+| GET | \`/api/orders/{order_id}\` | Order detail with decision analysis |
+| POST | \`/api/webhooks/simulate\` | Simulate Razorpay webhook |
+| GET | \`/api/eval/summary\` | Evaluation summary (5-min cache) |
+| GET | \`/api/agent-runs\` | Agent runs list |
+| GET | \`/api/agent-runs/{run_id}\` | Run detail |
+| GET | \`/api/agent-runs/{run_id}/events\` | SSE event stream |
+| POST | \`/api/agent-runs/{order_id}/start\` | Start background agent run |
+| POST | \`/api/agent-runs/{run_id}/replay\` | Replay run for demo |
+| POST | \`/api/recovery-actions/{action_id}/complete\` | Mark action complete |
+| GET | \`/api/mcp/status\` | MCP server status |
+| GET | \`/api/mcp/tools\` | MCP tool catalog |
+| GET | \`/api/mcp/activity\` | Recent MCP activity |
+| GET | \`/api/mcp/activity/stream\` | SSE activity stream |
+| POST | \`/api/seed\` | Seed demo data (idempotent) |
 
 ## Webhook Schema
 
@@ -318,6 +377,15 @@ Every side-effecting operation goes through the same safety gate and executor us
   }
 }
 \`\`\`
+
+## Start Agent Run
+
+\`\`\`bash
+curl -X POST http://localhost:8000/api/agent-runs/order_001/start
+# Returns immediately with run_id, status=running
+\`\`\`
+
+Then connect SSE: \`GET /api/agent-runs/{run_id}/events\`
     `,
   },
   {
@@ -330,13 +398,29 @@ Every side-effecting operation goes through the same safety gate and executor us
 One \`order_id\` can have multiple \`payment_id\` attempts. \`event_id\` is the webhook deduplication key.
 
 \`\`\`sql
+-- Merchants & Customers
+CREATE TABLE merchants (
+  merchant_id TEXT PRIMARY KEY,
+  max_retries INT NOT NULL DEFAULT 3,
+  contact_budget_per_day INT NOT NULL DEFAULT 2
+);
+
+CREATE TABLE customers (
+  customer_id TEXT PRIMARY KEY,
+  recovery_propensity NUMERIC(3,2) NOT NULL,
+  payment_method_preference TEXT,
+  historical_success_rate NUMERIC(3,2),
+  customer_value NUMERIC(12,2) NOT NULL
+);
+
+-- Orders & Attempts
 CREATE TABLE orders (
   order_id TEXT PRIMARY KEY,
   merchant_id TEXT REFERENCES merchants(merchant_id),
   customer_id TEXT REFERENCES customers(customer_id),
-  amount NUMERIC NOT NULL,
+  amount NUMERIC(12,2) NOT NULL,
   currency TEXT NOT NULL DEFAULT 'INR',
-  status TEXT NOT NULL DEFAULT 'pending',
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending, recovered, lost
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -345,18 +429,29 @@ CREATE TABLE payment_attempts (
   order_id TEXT REFERENCES orders(order_id),
   attempt_number INT NOT NULL,
   method TEXT NOT NULL,
-  status TEXT NOT NULL,
+  status TEXT NOT NULL,  -- failed, captured, pending
   error_code TEXT,
+  error_description TEXT,
   error_reason TEXT,
   error_source TEXT,
   error_step TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (order_id, attempt_number)
 );
 
+-- Webhooks (idempotency key)
+CREATE TABLE webhook_events (
+  event_id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  processed_at TIMESTAMPTZ
+);
+
+-- Agent runs & events
 CREATE TABLE agent_runs (
   run_id TEXT PRIMARY KEY,
   order_id TEXT REFERENCES orders(order_id),
-  status TEXT NOT NULL,
+  status TEXT NOT NULL,  -- running, completed, failed
   current_stage TEXT,
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   completed_at TIMESTAMPTZ,
@@ -374,12 +469,13 @@ CREATE TABLE agent_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Recovery actions
 CREATE TABLE recovery_actions (
   action_id BIGSERIAL PRIMARY KEY,
   order_id TEXT REFERENCES orders(order_id),
   action_type TEXT NOT NULL,
-  expected_value NUMERIC NOT NULL,
-  status TEXT NOT NULL DEFAULT 'scheduled',
+  expected_value NUMERIC(12,2) NOT NULL,
+  status TEXT NOT NULL DEFAULT 'scheduled',  -- scheduled, executed, cancelled
   scheduled_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   executed_at TIMESTAMPTZ,
   cancelled_at TIMESTAMPTZ,
@@ -393,34 +489,37 @@ CREATE TABLE recovery_actions (
     title: "Evaluation",
     icon: <Zap className="h-4 w-4" />,
     content: `
-# Evaluation
+# Evaluation Framework
 
 Compare exactly two policies on the same synthetic batch:
 
-1. \`always_retry\`
-2. \`reclaim\`
+1. \`always_retry\` — baseline that retries every failed payment
+2. \`reclaim\` — full AI + deterministic policy pipeline
 
 ## Metrics
 
 - Recovered revenue
 - Recovery rate
-- Incremental recovered revenue
+- Incremental recovered revenue (vs always_retry)
 - Unnecessary interventions
 - Customer contact count
 - Average time to resolution
 
-The headline pitch metric is **incremental recovered revenue versus \`always_retry\`**.
+The headline pitch metric: **incremental recovered revenue versus \`always_retry\`**.
 
-Run evaluation:
+## Run Evaluation
+
 \`\`\`bash
-GET /eval/summary?n_orders=2000&seed=42
+GET /api/eval/summary?n_orders=2000&seed=42
 \`\`\`
+
+Results cached for 5 minutes. Synthetic probabilities are seeded and disclosed — not Razorpay production statistics.
     `,
   },
   {
     id: "demo",
-    title: "Demo",
-    icon: <Zap className="h-4 w-4" />,
+    title: "Demo Scenarios",
+    icon: <Activity className="h-4 w-4" />,
     content: `
 # Demo Scenarios
 
@@ -445,22 +544,40 @@ duplicate event ignored
 ## Replanning Demo
 
 \`\`\`text
-hard decline
+hard decline (card_blocked)
         ↓
-agent proposes retry
+agent proposes RETRY_DELAYED
         ↓
-policy rejects retry
+policy rejects retry (hard decline)
         ↓
 agent receives rejection
         ↓
-agent replans
+agent replans → PAYMENT_LINK
         ↓
-payment link
+safety gate approves
         ↓
-safe executor accepts
+executor executes
 \`\`\`
 
-This is the strongest demonstration that the AI is operating inside a real controlled agent runtime.
+This demonstrates the AI operating inside a real controlled agent runtime with deterministic guardrails.
+
+## Terminal Order Demo
+
+\`\`\`text
+order already recovered
+        ↓
+agent loads context (status=recovered)
+        ↓
+full pipeline executes
+        ↓
+planner proposes NO_ACTION
+        ↓
+safety gate approves
+        ↓
+executor executes NO_ACTION (no-op)
+        ↓
+run completes cleanly
+\`\`\`
     `,
   },
   {
@@ -471,25 +588,25 @@ This is the strongest demonstration that the AI is operating inside a real contr
 # Deployment
 
 \`\`\`text
-Vercel
+Vercel (Frontend)
   ↓
-FastAPI
-  ├── REST
-  ├── SSE
+FastAPI (Backend)
+  ├── REST /api/*
+  ├── SSE /api/agent-runs/*/events
   └── MCP /mcp
        ↓
-PostgreSQL
+PostgreSQL (Supabase / Render / self-hosted)
        ↓
-Gemini API
+Gemini API (Google AI Studio)
 \`\`\`
 
 ## Environment Variables
 
 ### Backend
 \`\`\`env
-DATABASE_URL=postgresql://...
-GEMINI_API_KEY=...
-GEMINI_MODEL=gemini-3.7-flash
+DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/db
+GEMINI_API_KEY=your-gemini-key
+GEMINI_MODEL=gemini-1.5-flash
 CORS_ORIGINS=https://your-frontend.vercel.app
 \`\`\`
 
@@ -498,60 +615,162 @@ CORS_ORIGINS=https://your-frontend.vercel.app
 NEXT_PUBLIC_API_URL=https://your-backend.render.com
 \`\`\`
 
-## Backend (Render)
+## Backend (Render / Fly.io / Railway)
 - Build: \`pip install -r requirements.txt\`
 - Start: \`PYTHONPATH=. uvicorn backend.api.main:app --host 0.0.0.0 --port \$PORT\`
+- Health: \`GET /health\`
 
 ## Frontend (Vercel)
 - Build: \`cd dashboard && npm install && npm run build\`
-- Output: \`.next\` (static export)
+- Output: \`.next\` (static export for App Router)
+
+## Docker
+\`\`\`bash
+docker-compose up -d
+\`\`\`
+Includes PostgreSQL + Redis + API.
     `,
   },
   {
     id: "troubleshooting",
     title: "Troubleshooting",
-    icon: <Shield className="h-4 w-4" />,
+    icon: <Wrench className="h-4 w-4" />,
     content: `
 # Troubleshooting
 
 ## Common Issues
 
 ### Backend won't start
-- Check \`DATABASE_URL\` is correct
-- Verify \`GEMINI_API_KEY\` is set
-- Ensure PostgreSQL is accessible
+- Check \`DATABASE_URL\` is correct (async driver: \`postgresql+asyncpg://\`)
+- Verify \`GEMINI_API_KEY\` is set (or mock will be used)
+- Ensure database is accessible (PostgreSQL or SQLite)
 
 ### Frontend shows "Backend not responding"
 - Verify \`NEXT_PUBLIC_API_URL\` matches backend URL
-- Check CORS settings on backend
-- Ensure backend is deployed and healthy
+- Check CORS settings on backend (\`CORS_ORIGINS\`)
+- Ensure backend is deployed and healthy (\`GET /health\`)
 
-### Agent not running
-- Check webhook ingestion works
+### Agent not running / stuck
+- Check webhook ingestion works (\`POST /api/webhooks/simulate\`)
 - Verify \`agent_runs\` table has entries
-- Check SSE connection in browser dev tools
+- Check SSE connection in browser dev tools (\`/api/agent-runs/{run_id}/events\`)
+- Background task may have failed — check backend logs
 
 ### MCP connection fails
 - Verify \`/mcp\` endpoint is accessible
-- Check MCP SDK version compatibility
+- Check MCP SDK version compatibility (v2+)
 - Ensure Streamable HTTP transport is configured
+- For stdio: \`uv run mcp dev backend/mcp_server/server.py\`
+
+### Order status not updating
+- \`payment.failed\` → order status = \`failed\`
+- \`payment.captured\` → order status = \`recovered\`, pending actions cancelled
+- Executor re-checks policy before execution
 
 ## Debug Commands
 
 \`\`\`bash
-# Check backend health
+# Backend health
 curl https://your-backend.com/health
 
-# Check orders
+# Orders
 curl https://your-backend.com/api/orders
 
-# Check eval
+# Evaluation
 curl https://your-backend.com/api/eval/summary
 
-# Test webhook
-curl -X POST https://your-backend.com/api/webhooks/simulate \
-  -H "Content-Type: application/json" \
+# Test webhook (payment.failed)
+curl -X POST http://localhost:8000/api/webhooks/simulate \\
+  -H "Content-Type: application/json" \\
   -d '{"entity":"event","account_id":"acc_test","event":"payment.failed","contains":["payment"],"payload":{"payment":{"entity":{"id":"pay_test","order_id":"order_test","amount":500000,"currency":"INR","method":"card","status":"failed","attempt_number":1,"error_reason":"issuer_timeout"}}}}'
+
+# Test webhook (payment.captured)
+curl -X POST http://localhost:8000/api/webhooks/simulate \\
+  -H "Content-Type: application/json" \\
+  -d '{"entity":"event","account_id":"acc_test","event":"payment.captured","contains":["payment"],"payload":{"payment":{"entity":{"id":"pay_test_2","order_id":"order_test","amount":500000,"currency":"INR","method":"card","status":"captured","attempt_number":2}}}}'
+
+# Start agent run
+curl -X POST http://localhost:8000/api/agent-runs/order_test/start
+
+# Stream events
+curl http://localhost:8000/api/agent-runs/{run_id}/events
+\`\`\`
+    `,
+  },
+  {
+    id: "contributing",
+    title: "Contributing",
+    icon: <GitBranch className="h-4 w-4" />,
+    badge: "New",
+    badgeVariant: "default",
+    content: `
+# Contributing
+
+## Development Setup
+
+\`\`\`bash
+# Clone
+git clone https://github.com/your-org/reclaim
+cd reclaim
+
+# Backend
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env  # Edit DATABASE_URL, GEMINI_API_KEY
+uvicorn backend.api.main:app --reload --port 8000
+
+# Frontend (separate terminal)
+cd dashboard
+npm install
+npm run dev
+\`\`\`
+
+## Running Tests
+
+\`\`\`bash
+# Backend tests (requires database)
+make test
+# or
+cd backend && DATABASE_URL=sqlite+aiosqlite:///./test.db ./venv/bin/pytest
+
+# E2E test (requires PostgreSQL)
+make test-e2e
+
+# Frontend lint
+cd dashboard && npm run lint
+\`\`\`
+
+## Code Style
+
+- Backend: Ruff (line-length 100, single quotes) + MyPy (strict-ish)
+- Frontend: ESLint + TypeScript strict
+- Commit messages: Conventional Commits
+
+## Project Structure
+
+\`\`\`text
+reclaim/
+├── backend/
+│   ├── agent_runtime/    # Orchestrator, state, events, provider
+│   ├── agents/           # Diagnosis, candidates, planner, replanner
+│   ├── api/              # FastAPI routes, webhooks, SSE
+│   ├── db/               # SQLAlchemy models, session, schema
+│   ├── evaluator/        # Baseline comparison
+│   ├── executor/         # Safe execution, idempotency
+│   ├── gemini/           # Google GenAI provider
+│   ├── mcp_server/       # MCP v2 server, tools, activity
+│   ├── policy/           # Constraints, ERV scoring, validator
+│   ├── simulator/        # Seeded outcome simulator
+│   ├── tools/            # Internal tool registry
+│   └── tests/            # Pytest suite
+├── dashboard/
+│   ├── app/              # Next.js 16 App Router pages
+│   ├── components/       # React components (shadcn-style)
+│   └── lib/              # API client, SSE, types
+├── docs/                 # Markdown documentation
+└── scripts/              # Seeding, E2E test
 \`\`\`
     `,
   },
@@ -565,7 +784,7 @@ function DocSidebar({ activeId, onSelect }: { activeId: string; onSelect: (id: s
           <button
             key={section.id}
             onClick={() => onSelect(section.id)}
-            className={`w-full text-left p-2 rounded transition-colors ${
+            className={`w-full text-left p-2 rounded transition-colors flex items-center justify-between ${
               activeId === section.id
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-accent"
@@ -575,6 +794,11 @@ function DocSidebar({ activeId, onSelect }: { activeId: string; onSelect: (id: s
               {section.icon}
               <span className="text-sm font-medium">{section.title}</span>
             </div>
+            {section.badge && (
+              <Badge variant={section.badgeVariant} className="text-xs">
+                {section.badge}
+              </Badge>
+            )}
           </button>
         ))}
       </nav>
@@ -583,7 +807,6 @@ function DocSidebar({ activeId, onSelect }: { activeId: string; onSelect: (id: s
 }
 
 function MarkdownRenderer({ content }: { content: string }) {
-  // Simple markdown renderer for our docs
   const lines = content.split("\n");
   const elements: React.ReactNode[] = [];
   
@@ -644,7 +867,12 @@ export default function DocsPage() {
         <main className="flex-1 min-w-0">
           <Card>
             <CardHeader>
-              <CardTitle>{activeSection.title}</CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle>{activeSection.title}</CardTitle>
+                {activeSection.badge && (
+                  <Badge variant={activeSection.badgeVariant}>{activeSection.badge}</Badge>
+                )}
+              </div>
             </CardHeader>
             <CardContent>
               <MarkdownRenderer content={activeSection.content} />

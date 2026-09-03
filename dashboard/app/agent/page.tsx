@@ -24,6 +24,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  TaskSteps,
+  TaskStep,
+} from "@/components/ui/task-steps";
 
 import { api, AgentRun, AgentEvent } from "@/lib/api";
 import {
@@ -114,83 +118,32 @@ const STAGE_STATUS_CONFIG: Record<
   },
 };
 
-function StageNode({
-  stage,
-  status,
-  isCurrent,
-  onClick,
-}: {
-  stage: AgentStage;
-  status: AgentStageStatus;
-  isCurrent: boolean;
-  onClick?: () => void;
-}) {
-  const config = STAGE_STATUS_CONFIG[status];
-  const description = STAGE_DESCRIPTIONS[stage] || "";
-  const label = STAGE_LABELS[stage] || stage;
-
-  return (
-    <div
-      className="flex flex-col items-center space-y-2 group relative"
-      onClick={onClick}
-      style={{
-        cursor: onClick ? "pointer" : "default",
-      }}
-    >
-      <div className="relative">
-        <div
-          className={`relative flex h-14 w-14 items-center justify-center rounded-full border-2 transition-all duration-200 ${config.bg} ${config.border} ${config.text} ${
-            isCurrent
-              ? "ring-2 ring-offset-2 ring-primary"
-              : ""
-          }`}
-        >
-          {config.icon}
-        </div>
-
-        {isCurrent && (
-          <span className="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-primary animate-pulse" />
-        )}
-      </div>
-
-      <div className="text-center w-32">
-        <p
-          className="text-xs font-medium truncate"
-          title={description}
-        >
-          {label}
-        </p>
-
-        <p className="text-[10px] text-muted-foreground truncate">
-          {config.label}
-        </p>
-
-        {description && (
-          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 px-2 py-1.5 text-xs bg-gray-900 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-normal z-10">
-            {description}
-          </div>
-        )}
-      </div>
-    </div>
+function stageDurationMeta(
+  events: AgentEvent[],
+  stage: AgentStage
+): string | undefined {
+  const started = events.find(
+    (e) =>
+      e.agent_stage === stage &&
+      e.event_type === "agent.stage.started"
   );
-}
+  const completed = [...events]
+    .reverse()
+    .find(
+      (e) =>
+        e.agent_stage === stage &&
+        e.event_type === "agent.stage.completed"
+    );
 
-function StageConnector({
-  isLast,
-  isActive,
-}: {
-  isLast: boolean;
-  isActive?: boolean;
-}) {
-  if (isLast) return null;
+  if (!started || !completed) return undefined;
 
-  return (
-    <div
-      className={`flex-1 h-1 mx-2 self-center transition-colors ${
-        isActive ? "bg-green-300" : "bg-gray-200"
-      }`}
-    />
-  );
+  const ms =
+    new Date(completed.created_at).getTime() -
+    new Date(started.created_at).getTime();
+
+  if (ms < 100) return undefined; // Only show durations > 100ms
+
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 export default function AgentPage() {
@@ -204,8 +157,6 @@ export default function AgentPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] =
     useState<string>("all");
-
-  const [autoScroll, setAutoScroll] = useState(true);
 
   useEffect(() => {
     api
@@ -246,6 +197,15 @@ export default function AgentPage() {
               }
             : null
         );
+
+        // Refetch runs list when run completes
+        if (
+          event.event_type === "agent.run.completed" ||
+          (event.payload?.status === "completed" ||
+            event.payload?.status === "failed")
+        ) {
+          api.agentRuns().then(setRuns).catch(console.error);
+        }
       });
 
       setEventStream(stream);
@@ -339,6 +299,36 @@ export default function AgentPage() {
       return matchesSearch && matchesStatus;
     });
   }, [runs, searchQuery, statusFilter]);
+
+  // TaskSteps pipeline props derived from the selected run
+  const runFailed = selectedRun?.run.status === "failed";
+  const runCompleted =
+    selectedRun?.run.status === "completed";
+
+  const stageIndex = selectedRun
+    ? STAGE_ORDER.indexOf(
+        selectedRun.run.current_stage as AgentStage
+      )
+    : -1;
+
+  const pipelineCurrent = !selectedRun
+    ? -1
+    : runCompleted
+    ? STAGE_ORDER.length
+    : selectedRun.run.current_stage === "REPLANNING"
+    ? STAGE_ORDER.indexOf("PLANNING")
+    : Math.max(stageIndex, 0);
+
+  const pipelineSteps: TaskStep[] = STAGE_ORDER.map(
+    (stage) => ({
+      id: stage,
+      label: STAGE_LABELS[stage],
+      meta: stageDurationMeta(
+        selectedRun?.events ?? [],
+        stage
+      ),
+    })
+  );
 
   if (loading) {
     return (
@@ -622,187 +612,14 @@ export default function AgentPage() {
                 <ScrollArea className="h-full">
 
                   {/* Pipeline Visualization */}
-                  <div className="px-4 py-4 border-b">
+                  <div className="px-4 py-4">
 
-                    <div className="flex flex-col items-center space-y-2">
-
-                      {STAGE_ORDER.map((stage, idx) => (
-                        <div
-                          key={stage}
-                          className="flex items-center w-full"
-                        >
-                          <StageNode
-                            stage={stage}
-                            status={getStageStatus(stage)}
-                            isCurrent={
-                              selectedRun?.run.current_stage ===
-                              stage
-                            }
-                            onClick={() => {}}
-                          />
-
-                          <StageConnector
-                            isLast={
-                              idx ===
-                              STAGE_ORDER.length - 1
-                            }
-                            isActive={
-                              getStageStatus(stage) ===
-                              "completed"
-                            }
-                          />
-                        </div>
-                      ))}
-
-                    </div>
-                  </div>
-
-                  {/* Stage Details */}
-                  <div className="p-4">
-
-                    {selectedRun ? (
-                      <div className="space-y-3">
-
-                        {STAGE_ORDER.map((stage) => {
-                          const status =
-                            getStageStatus(stage);
-
-                          const stageEvents =
-                            selectedRun.events.filter(
-                              (e) =>
-                                e.agent_stage === stage
-                            );
-
-                          const hasEvents =
-                            stageEvents.length > 0;
-
-                          const config =
-                            STAGE_STATUS_CONFIG[status];
-
-                          const isCurrent =
-                            selectedRun.run.current_stage ===
-                            stage;
-
-                          return (
-                            <div
-                              key={stage}
-                              className={`flex items-start gap-3 p-3 rounded-lg transition-colors ${
-                                isCurrent
-                                  ? "bg-primary/5 border border-primary/20"
-                                  : "bg-gray-50/50"
-                              }`}
-                            >
-
-                              <div
-                                className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full border-2 ${config.bg} ${config.border} ${config.text}`}
-                              >
-                                {config.icon}
-                              </div>
-
-                              <div className="flex-1 min-w-0">
-
-                                <div className="flex items-center gap-2">
-
-                                  <span className="font-medium text-sm truncate">
-                                    {STAGE_LABELS[stage]}
-                                  </span>
-
-                                  <Badge
-                                    variant={
-                                      status ===
-                                      "completed"
-                                        ? "success"
-                                        : status ===
-                                          "running"
-                                        ? "default"
-                                        : status ===
-                                            "rejected" ||
-                                          status ===
-                                            "failed"
-                                        ? "destructive"
-                                        : "secondary"
-                                    }
-                                    className="text-[10px]"
-                                  >
-                                    {
-                                      STAGE_STATUS_CONFIG[
-                                        status
-                                      ].label
-                                    }
-                                  </Badge>
-
-                                </div>
-
-                                <p className="text-xs text-muted-foreground mt-0.5">
-                                  {
-                                    STAGE_DESCRIPTIONS[
-                                      stage
-                                    ]
-                                  }
-                                </p>
-
-                                {hasEvents && (
-                                  <div className="mt-2 pt-2 border-t border-gray-100">
-
-                                    <div className="text-[10px] text-muted-foreground mb-1">
-                                      {
-                                        stageEvents.length
-                                      }{" "}
-                                      events
-                                    </div>
-
-                                    <div className="space-y-1 max-h-32 overflow-y-auto">
-
-                                      {stageEvents
-                                        .slice(-3)
-                                        .map((e) => (
-                                          <div
-                                            key={
-                                              e.event_seq
-                                            }
-                                            className="text-[10px] text-muted-foreground font-mono"
-                                          >
-                                            {new Date(
-                                              e.created_at
-                                            ).toLocaleTimeString()}{" "}
-                                            -{" "}
-                                            {
-                                              e.event_type
-                                            }
-                                          </div>
-                                        ))}
-
-                                      {stageEvents.length >
-                                        3 && (
-                                        <div className="text-[10px] text-muted-foreground">
-                                          +
-                                          {stageEvents.length -
-                                            3}{" "}
-                                          more...
-                                        </div>
-                                      )}
-
-                                    </div>
-                                  </div>
-                                )}
-
-                              </div>
-                            </div>
-                          );
-                        })}
-
-                      </div>
-                    ) : (
-                      <div className="text-center text-muted-foreground py-8">
-
-                        <Clock className="h-8 w-8 mx-auto text-muted-foreground/30" />
-
-                        <p className="mt-2">
-                          Select a run to view pipeline details
-                        </p>
-
-                      </div>
-                    )}
+                    <TaskSteps
+                      steps={pipelineSteps}
+                      current={pipelineCurrent}
+                      failed={runFailed ?? false}
+                      label="Agent pipeline progress"
+                    />
 
                   </div>
 
@@ -823,27 +640,6 @@ export default function AgentPage() {
                 Event Timeline
               </CardTitle>
 
-              {selectedRun && (
-                <div className="flex items-center gap-2">
-
-                  <label className="flex items-center gap-1.5 text-xs">
-
-                    <input
-                      type="checkbox"
-                      checked={autoScroll}
-                      onChange={(e) =>
-                        setAutoScroll(e.target.checked)
-                      }
-                      className="w-3 h-3"
-                    />
-
-                    Auto-scroll
-
-                  </label>
-
-                </div>
-              )}
-
             </CardHeader>
 
             <CardContent className="flex-1 p-0 min-h-0">
@@ -851,152 +647,118 @@ export default function AgentPage() {
               {selectedRun ? (
                 <ScrollArea className="h-full">
 
-                  {selectedRun.events.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                  <div className="space-y-3 p-4">
 
-                      <Clock className="h-8 w-8 text-muted-foreground/30" />
+                    {STAGE_ORDER.map((stage) => {
+                      const status =
+                        getStageStatus(stage);
 
-                      <p className="mt-2 text-sm">
-                        No events yet
-                      </p>
+                      const stageEvents =
+                        selectedRun.events.filter(
+                          (e) =>
+                            e.agent_stage === stage
+                        );
 
-                      <p className="text-xs">
-                        Waiting for agent events...
-                      </p>
+                      const hasEvents =
+                        stageEvents.length > 0;
 
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2 p-2">
+                      const config =
+                        STAGE_STATUS_CONFIG[status];
 
-                      {selectedRun.events
-                        .slice()
-                        .reverse()
-                        .map((event) => {
+                      const isCurrent =
+                        selectedRun.run.current_stage ===
+                        stage;
 
-                          const eventConfig = {
-                            "agent.stage.started": {
-                              icon: ZapIcon,
-                              color: "text-blue-500",
-                              bg: "bg-blue-50",
-                              border: "border-blue-200",
-                            },
+                      return (
+                        <div
+                          key={stage}
+                          className={`flex items-start gap-3 p-3 rounded-lg transition-colors ${
+                            isCurrent
+                              ? "bg-primary/5 border border-primary/20"
+                              : "bg-gray-50/50"
+                          }`}
+                        >
 
-                            "agent.stage.completed": {
-                              icon: CheckCircle2,
-                              color: "text-green-500",
-                              bg: "bg-green-50",
-                              border: "border-green-200",
-                            },
+                          <div
+                            className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full border-2 ${config.bg} ${config.border} ${config.text}`}
+                          >
+                            {config.icon}
+                          </div>
 
-                            "agent.tool.called": {
-                              icon: ZapIcon,
-                              color: "text-purple-500",
-                              bg: "bg-purple-50",
-                              border: "border-purple-200",
-                            },
+                          <div className="flex-1 min-w-0">
 
-                            "agent.tool.completed": {
-                              icon: CheckCircle2,
-                              color: "text-green-500",
-                              bg: "bg-green-50",
-                              border: "border-green-200",
-                            },
+                            <div className="flex items-center gap-2">
 
-                            "agent.policy.rejected": {
-                              icon: CircleX,
-                              color: "text-red-500",
-                              bg: "bg-red-50",
-                              border: "border-red-200",
-                            },
+                              <span className="font-medium text-sm truncate">
+                                {STAGE_LABELS[stage]}
+                              </span>
 
-                            "agent.replan.started": {
-                              icon: RotateCcw,
-                              color: "text-orange-500",
-                              bg: "bg-orange-50",
-                              border: "border-orange-200",
-                            },
-
-                            "agent.plan.created": {
-                              icon: ZapIcon,
-                              color: "text-indigo-500",
-                              bg: "bg-indigo-50",
-                              border: "border-indigo-200",
-                            },
-
-                            "agent.action.executed": {
-                              icon: ZapIcon,
-                              color: "text-emerald-500",
-                              bg: "bg-emerald-50",
-                              border: "border-emerald-200",
-                            },
-
-                            "agent.run.started": {
-                              icon: Play,
-                              color: "text-blue-500",
-                              bg: "bg-blue-50",
-                              border: "border-blue-200",
-                            },
-                          } as const;
-
-                          const config =
-                            eventConfig[
-                              event.event_type as keyof typeof eventConfig
-                            ] || {
-                              icon: Clock,
-                              color: "text-gray-500",
-                              bg: "bg-gray-50",
-                              border: "border-gray-200",
-                            };
-
-                          const Icon = config.icon;
-
-                          return (
-                            <div
-                              key={event.event_seq}
-                              className={`flex items-start gap-3 p-3 rounded-lg border transition-colors ${config.bg} ${config.border}`}
-                            >
-
-                              <div
-                                className={`flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-full ${config.bg} ${config.color}`}
+                              <Badge
+                                variant={
+                                  status === "completed"
+                                    ? "success"
+                                    : status === "running"
+                                    ? "default"
+                                    : status === "rejected" ||
+                                      status === "failed"
+                                    ? "destructive"
+                                    : "secondary"
+                                }
+                                className="text-[10px]"
                               >
-                                <Icon className="h-3.5 w-3.5" />
-                              </div>
+                                {
+                                  STAGE_STATUS_CONFIG[status]
+                                    .label
+                                }
+                              </Badge>
 
-                              <div className="flex-1 min-w-0">
+                            </div>
 
-                                <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {STAGE_DESCRIPTIONS[stage]}
+                            </p>
 
-                                  <span className="text-sm font-medium text-gray-700">
-                                    {event.event_type}
-                                  </span>
+                            {hasEvents && (
+                              <div className="mt-2 pt-2 border-t border-gray-100">
 
-                                  <span className="text-[10px] text-muted-foreground font-mono">
-                                    {new Date(
-                                      event.created_at
-                                    ).toLocaleTimeString()}
-                                  </span>
-
+                                <div className="text-[10px] text-muted-foreground mb-1">
+                                  {stageEvents.length} events
                                 </div>
 
-                                <p className="text-xs text-muted-foreground mt-0.5">
-                                  {event.agent_stage}
-                                </p>
+                                <div className="space-y-1 max-h-32 overflow-y-auto">
 
-                                <pre className="text-[10px] text-muted-foreground mt-1 overflow-auto max-h-24 text-left whitespace-pre-wrap break-words">
-                                  {JSON.stringify(
-                                    event.payload,
-                                    null,
-                                    2
+                                  {stageEvents
+                                    .slice(-3)
+                                    .map((e) => (
+                                      <div
+                                        key={e.event_seq}
+                                        className="text-[10px] text-muted-foreground font-mono"
+                                      >
+                                        {new Date(
+                                          e.created_at
+                                        ).toLocaleTimeString()}{" "}
+                                        - {e.event_type}
+                                      </div>
+                                    ))}
+
+                                  {stageEvents.length > 3 && (
+                                    <div className="text-[10px] text-muted-foreground">
+                                      +
+                                      {stageEvents.length - 3}{" "}
+                                      more...
+                                    </div>
                                   )}
-                                </pre>
 
+                                </div>
                               </div>
-                            </div>
-                          );
-                        })}
+                            )}
 
-                    </div>
-                  )}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                  </div>
 
                 </ScrollArea>
               ) : (

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models import Order, RecoveryAction
-from backend.policy.constraints import get_allowed_actions, RETRY_NOW, RETRY_DELAYED, PAYMENT_LINK, WHATSAPP_NUDGE, ALTERNATE_METHOD
+from backend.policy.constraints import get_allowed_actions, RETRY_NOW, RETRY_DELAYED, PAYMENT_LINK, WHATSAPP_NUDGE, ALTERNATE_METHOD, NO_ACTION
 
 
 @dataclass
@@ -82,7 +82,23 @@ async def execute_recovery_action(
     
     For immediate actions (delay_minutes=0), marks as executed.
     For delayed actions (delay_minutes>0), schedules for later execution.
+    NO_ACTION is a no-op that always succeeds.
     """
+    # NO_ACTION is a no-op - always succeeds without changing state
+    if action_type == NO_ACTION:
+        from backend.policy.scoring import calculate_expected_value
+        expected_value = await calculate_expected_value(session, order_id, action_type)
+        action = await create_recovery_action(session, order_id, action_type, expected_value)
+        action.status = "executed"
+        action.executed_at = datetime.now(timezone.utc)
+        await session.flush()
+        return ActionResult(
+            success=True,
+            action_id=action.action_id,
+            reason="No action required",
+            scheduled_at=action.scheduled_at,
+        )
+
     # Re-check policy immediately before execution
     allowed = await get_allowed_actions(session, order_id)
     if action_type not in allowed:
@@ -153,6 +169,20 @@ async def schedule_recovery_action(
     delay_minutes: int = 0,
 ) -> ActionResult:
     """Schedule a recovery action for later execution."""
+    if action_type == NO_ACTION:
+        from backend.policy.scoring import calculate_expected_value
+        expected_value = await calculate_expected_value(session, order_id, action_type)
+        action = await create_recovery_action(session, order_id, action_type, expected_value)
+        action.status = "executed"
+        action.executed_at = datetime.now(timezone.utc)
+        await session.flush()
+        return ActionResult(
+            success=True,
+            action_id=action.action_id,
+            reason="No action required",
+            scheduled_at=action.scheduled_at,
+        )
+
     allowed = await get_allowed_actions(session, order_id)
     if action_type not in allowed:
         return ActionResult(
