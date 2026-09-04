@@ -165,6 +165,3 @@ reclaim/
 ├── docs/                 # Markdown documentation
 └── scripts/              # Seeding, E2E test
 ```
-
-## License
-MIT
