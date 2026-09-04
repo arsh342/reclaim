@@ -91,30 +91,54 @@ async def ingest_webhook(
         session.add(order)
     
     if webhook.event == "payment.failed":
-        # Create payment attempt
-        attempt = PaymentAttempt(
-            payment_id=payment.id,
-            order_id=order_id,
-            attempt_number=payment.attempt_number,
-            method=payment.method,
-            status="failed",
-            error_code=payment.error_code,
-            error_description=payment.error_description,
-            error_reason=payment.error_reason,
-            error_source=payment.error_source,
-            error_step=payment.error_step,
-        )
-        session.add(attempt)
+        # Check if payment attempt already exists (idempotency)
+        attempt = await session.get(PaymentAttempt, payment.id)
+        if attempt:
+            # Update existing attempt
+            attempt.status = "failed"
+            attempt.attempt_number = payment.attempt_number
+            attempt.method = payment.method
+            attempt.error_code = payment.error_code
+            attempt.error_description = payment.error_description
+            attempt.error_reason = payment.error_reason
+            attempt.error_source = payment.error_source
+            attempt.error_step = payment.error_step
+        else:
+            # Create new payment attempt
+            attempt = PaymentAttempt(
+                payment_id=payment.id,
+                order_id=order_id,
+                attempt_number=payment.attempt_number,
+                method=payment.method,
+                status="failed",
+                error_code=payment.error_code,
+                error_description=payment.error_description,
+                error_reason=payment.error_reason,
+                error_source=payment.error_source,
+                error_step=payment.error_step,
+            )
+            session.add(attempt)
         
         # Update order status to reflect failed payment
         if order.status == "pending":
             order.status = "failed"
         
     elif webhook.event == "payment.captured":
-        # Update payment attempt
+        # Check if payment attempt already exists (idempotency)
         attempt = await session.get(PaymentAttempt, payment.id)
         if attempt:
+            # Update existing attempt
             attempt.status = "captured"
+        else:
+            # Create new payment attempt for captured payment
+            attempt = PaymentAttempt(
+                payment_id=payment.id,
+                order_id=order_id,
+                attempt_number=payment.attempt_number,
+                method=payment.method,
+                status="captured",
+            )
+            session.add(attempt)
         
         # Update order status
         order.status = "recovered"

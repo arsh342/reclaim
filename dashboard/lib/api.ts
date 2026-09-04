@@ -216,6 +216,36 @@ export const api = {
     ),
 };
 
+// SSE Event Stream helper
+export function createEventStream(runId: string) {
+  const url = `${API_URL}/api/agent-runs/${runId}/events`;
+  let eventSource: EventSource | null = null;
+
+  return {
+    connect: () => {
+      eventSource = new EventSource(url);
+      return eventSource;
+    },
+    onEvent: (callback: (event: any) => void) => {
+      if (eventSource) {
+        eventSource.onmessage = (e) => {
+          try {
+            callback(JSON.parse(e.data));
+          } catch {
+            // ignore parse errors
+          }
+        };
+      }
+    },
+    disconnect: () => {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+    },
+  };
+}
+
 // Helpers
 export function buildPaymentFailedWebhook(params: {
   event_id: string;

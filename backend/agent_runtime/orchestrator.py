@@ -67,28 +67,36 @@ class AgentOrchestrator:
         try:
             # Stage 1: Context Loading
             state = await self._run_context_loading(session, state)
+            await session.commit()
 
             # Stage 2: Diagnosis
             state = await self._run_diagnosis(session, state)
+            await session.commit()
             
             # Stage 3: Candidate Generation
             state = await self._run_candidate_generation(session, state)
+            await session.commit()
             
             # Stage 4: Counterfactual Evaluation
             state = await self._run_counterfactual_evaluation(session, state)
+            await session.commit()
             
             # Stage 5: Planning
             state = await self._run_planning(session, state)
+            await session.commit()
             
             # Stage 6: Safety Check
             state = await self._run_safety_check(session, state)
+            await session.commit()
             
             if not state.safety_result or not state.safety_result.get("approved", False):
                 # Replanning loop
                 max_replans = 3
                 while state.replan_count < max_replans:
                     state = await self._run_replanning(session, state)
+                    await session.commit()
                     state = await self._run_safety_check(session, state)
+                    await session.commit()
                     if state.safety_result and state.safety_result.get("approved", False):
                         break
                 
@@ -96,10 +104,12 @@ class AgentOrchestrator:
                     state.status = "failed"
                     state.final_reason = "Max replan attempts exceeded"
                     await self._complete_run(session, agent_run, state)
+                    await session.commit()
                     return state
             
             # Stage 7: Execution
             state = await self._run_execution(session, state)
+            await session.commit()
             
             # Stage 8: Waiting for Outcome (simplified - completes immediately)
             state.current_stage = AgentStage.WAITING_FOR_OUTCOME
@@ -107,6 +117,7 @@ class AgentOrchestrator:
             state.completed_at = datetime.now(timezone.utc)
             
             await self._complete_run(session, agent_run, state)
+            await session.commit()
             return state
             
         except Exception as e:

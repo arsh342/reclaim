@@ -1,14 +1,12 @@
 """API routes."""
 
-import asyncio
 import time
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.session import get_session_dependency
 from backend.db.models import (
@@ -52,25 +50,7 @@ from backend.core.config import settings
 router = APIRouter()
 
 
-# Create a separate engine for background tasks to avoid session conflicts
-_bg_db_url = settings.DATABASE_URL
-if not _bg_db_url.startswith("sqlite") and _bg_db_url.startswith("postgresql://"):
-    _bg_db_url = _bg_db_url.replace("postgresql://", "postgresql+asyncpg://")
-_background_engine = create_async_engine(_bg_db_url, pool_pre_ping=True)
-_background_session_maker = async_sessionmaker(_background_engine, expire_on_commit=False)
 
-
-async def run_agent_background(run_id: str, order_id: str):
-    """Run agent in background with its own session."""
-    async with _background_session_maker() as session:
-        from backend.agent_runtime.orchestrator import run_agent
-        try:
-            await run_agent(session, order_id, run_id=run_id)
-            await session.commit()
-        except Exception as e:
-            # Log error but don't crash background task
-            print(f"Background agent run {run_id} failed: {e}")
-            await session.rollback()
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -360,75 +340,51 @@ async def get_agent_events(
 @router.post("/agent-runs/{order_id}/start", response_model=AgentRunSchema)
 async def start_agent_run(
     order_id: str,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session_dependency),
 ):
-    """Start an agent run for an order (runs in background)."""
-    # Create agent run record
-    import uuid
-    run_id = f"run_{uuid.uuid4().hex[:12]}"
-    agent_run = AgentRun(
-        run_id=run_id,
-        order_id=order_id,
-        status="running",
-        current_stage=AgentStage.RECEIVED.value,
-    )
-    session.add(agent_run)
-    await session.flush()
+    """Start an agent run for an order (runs synchronously)."""
+    from backend.agent_runtime.orchestrator import run_agent
+    
+    state = await run_agent(session, order_id)
     await session.commit()
     
-    # Run agent in background
-    background_tasks.add_task(run_agent_background, run_id, order_id)
-    
     return AgentRunSchema(
-        run_id=run_id,
-        order_id=order_id,
-        status="running",
-        current_stage=AgentStage.RECEIVED.value,
-        started_at=agent_run.started_at,
-        completed_at=None,
-        final_action=None,
-        final_reason=None,
+        run_id=state.run_id,
+        order_id=state.order_id,
+        status=state.status,
+        current_stage=state.current_stage.value,
+        started_at=state.started_at,
+        completed_at=state.completed_at,
+        final_action=state.final_action,
+        final_reason=state.final_reason,
     )
 
 
 @router.post("/agent-runs/{run_id}/replay", response_model=AgentRunSchema)
 async def replay_agent_run(
     run_id: str,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session_dependency),
 ):
-    """Replay an agent run for demo purposes (runs in background)."""
+    """Replay an agent run for demo purposes."""
+    from backend.agent_runtime.orchestrator import run_agent
+    
     # Get the original run to find the order
     original_run = await session.get(AgentRun, run_id)
     if not original_run:
         raise HTTPException(status_code=404, detail="Agent run not found")
     
-    # Create new agent run record
-    import uuid
-    new_run_id = f"run_{uuid.uuid4().hex[:12]}"
-    agent_run = AgentRun(
-        run_id=new_run_id,
-        order_id=original_run.order_id,
-        status="running",
-        current_stage=AgentStage.RECEIVED.value,
-    )
-    session.add(agent_run)
-    await session.flush()
+    state = await run_agent(session, original_run.order_id)
     await session.commit()
     
-    # Run agent in background
-    background_tasks.add_task(run_agent_background, new_run_id, original_run.order_id)
-    
     return AgentRunSchema(
-        run_id=new_run_id,
-        order_id=original_run.order_id,
-        status="running",
-        current_stage=AgentStage.RECEIVED.value,
-        started_at=agent_run.started_at,
-        completed_at=None,
-        final_action=None,
-        final_reason=None,
+        run_id=state.run_id,
+        order_id=state.order_id,
+        status=state.status,
+        current_stage=state.current_stage.value,
+        started_at=state.started_at,
+        completed_at=state.completed_at,
+        final_action=state.final_action,
+        final_reason=state.final_reason,
     )
 
 
